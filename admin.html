@@ -87,7 +87,7 @@
     </div>
     <div class="table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Shift</th><th class="num">Lunch</th><th class="num">Grace</th><th>Weekly off</th><th>PIN</th><th>Status</th><th></th></tr></thead>
+        <thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Shift</th><th class="num">Lunch</th><th class="num">Grace</th><th>Weekly off</th><th>PIN</th><th>Face</th><th>Status</th><th></th></tr></thead>
         <tbody id="emp-rows"></tbody>
       </table>
     </div>
@@ -121,6 +121,14 @@
     <form class="card stack" id="set-form">
       <h3 style="font-size:17px">Settings</h3>
       <div><label for="set-company">Company name (shown on stamps)</label><input id="set-company" type="text"></div>
+      <div><label for="set-face">Face recognition</label>
+        <select id="set-face">
+          <option value="OFF">Off</option>
+          <option value="WARN">Record only: save match result, never block</option>
+          <option value="REQUIRED">Required: block punch if the face does not match</option>
+        </select>
+        <p class="muted small" style="margin:4px 0 0">Each employee's first selfie registers their face, or register it from Employees → Edit.</p>
+      </div>
       <div><label for="set-lunch">Lunch break</label>
         <select id="set-lunch">
           <option value="SELFIE">Staff take Lunch Out / Lunch In selfie</option>
@@ -162,6 +170,11 @@
     </div>
     <label class="switch"><input type="checkbox" id="f-active" checked> Active (can punch)</label>
     <label class="switch"><input type="checkbox" id="f-others"> Can take selfie for other employees (shared phone &amp; group selfie)</label>
+    <div id="f-face-row" class="hidden" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <span class="small" id="f-face-status" style="flex:1"></span>
+      <button type="button" class="btn sm ghost" id="f-face-reg">Register face</button>
+      <button type="button" class="btn sm ghost" id="f-face-reset">Reset face</button>
+    </div>
     <p class="muted small" style="margin:0" id="f-hint">Night shifts are fine: e.g. 22:00 to 06:00. Changing the PIN logs the employee out of their phone.</p>
     <datalist id="loc-names"></datalist>
     <button class="btn block" type="submit">Save employee</button>
@@ -169,6 +182,21 @@
 </div>
 
 <!-- Photo viewer -->
+<!-- Face registration camera -->
+<div class="modal hidden" id="face-modal">
+  <div class="box stack">
+    <div class="modal-head"><h3 id="fr-title">Register face</h3><button type="button" class="icon-btn" id="fr-close"></button></div>
+    <div style="position:relative;background:#000;border-radius:12px;overflow:hidden;aspect-ratio:3/4">
+      <video id="fr-video" playsinline muted autoplay style="width:100%;height:100%;object-fit:cover"></video>
+    </div>
+    <p class="muted small" style="margin:0">Only this employee in the frame, face straight to the camera, good light.</p>
+    <div style="display:flex;gap:8px">
+      <button type="button" class="btn ghost" id="fr-flip">Switch camera</button>
+      <button type="button" class="btn" id="fr-shoot" style="flex:1">Capture face</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal hidden" id="photo-modal">
   <div class="box">
     <div class="modal-head"><h3 id="ph-title"></h3><button type="button" class="icon-btn" data-close></button></div>

@@ -155,6 +155,8 @@ function renderDay() {
     if (x.lunchOver) meta.push('<span class="pill warn">Lunch +' + dur(x.lunchOver) + '</span>');
     if (x.ot) meta.push('<span class="pill info">OT ' + dur(x.ot) + '</span>');
     if (x.in) meta.push('<span class="pill mute">Worked ' + dur(x.workedMin) + '</span>');
+    const badFace = ps.filter(function (p) { return /^NO MATCH|^No face/.test(p.face || ''); }).length;
+    if (badFace) meta.push('<span class="pill bad">Face mismatch ' + badFace + '</span>');
     if (ps.some(function (p) { return p.by; })) meta.push('<span class="pill info">Punched on shared phone</span>');
     if (ps.length > 4) meta.push('<span class="pill mute">' + ps.length + ' punches</span>');
     return '<div class="emp-card"><div class="head"><div class="who"><b>' + esc(x.name) + '</b>' +
@@ -213,6 +215,7 @@ async function openPhoto(p) {
     '<div>' + esc(p.address || 'No address') + '</div>' +
     '<div class="muted small">' + p.lat + ', ' + p.lng + ' · ±' + esc(p.acc) + ' m GPS</div>' +
     (p.by ? '<div><span class="pill warn">Taken by ' + esc(p.by) + '</span></div>' : '') +
+    (p.face ? '<div><span class="pill ' + (/^Match|^Registered/.test(p.face) ? 'ok' : /^NO|^No face/.test(p.face) ? 'bad' : 'mute') + '">Face: ' + esc(p.face) + '</span></div>' : '') +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + fence +
     '<a class="btn sm ghost" href="' + map + '" target="_blank" rel="noopener">Open in Maps</a></div>';
   $('#photo-modal').classList.remove('hidden');
@@ -309,10 +312,11 @@ function renderEmployees() {
     return '<tr><td>' + esc(e.id) + '</td><td>' + esc(e.name) +
       (e.canPunch ? ' <span class="pill info" title="Can take selfies for other employees">Shared phone</span>' : '') +
       '</td><td>' + esc(e.dept) + '</td><td>' + fmtHM(e.shiftStart) + ' - ' + fmtHM(e.shiftEnd) +
-      '</td><td class="num">' + e.lunch + 'm</td><td class="num">' + e.grace + 'm</td><td>' + esc(e.weeklyOff) + '</td><td class="num">' + esc(e.pin) +
+      '</td><td class="num">' + e.lunch + 'm</td><td class="num">' + e.grace + 'm</td><td>' + esc(e.weeklyOff) + '</td><td class="num">' + esc(e.pin) + '</td><td>' +
+      (e.hasFace ? '<span class="pill ok" title="' + esc(e.faceReg) + '">Registered</span>' : '<span class="pill mute">Not yet</span>') +
       '</td><td>' + (e.active ? '<span class="pill ok">Active</span>' : '<span class="pill mute">Inactive</span>') +
       '</td><td><button class="btn sm ghost" data-edit="' + esc(e.id) + '">Edit</button></td></tr>';
-  }).join('') : '<tr><td colspan="10" class="empty">No employees yet.</td></tr>';
+  }).join('') : '<tr><td colspan="11" class="empty">No employees yet.</td></tr>';
 
   const sel = $('#rep-emp');
   const cur = sel.value;
@@ -353,6 +357,8 @@ function openEmp(e) {
   document.querySelectorAll('#f-off input').forEach(function (c) { c.checked = off.indexOf(c.value.toLowerCase()) >= 0; });
   $('#f-active').checked = e.active;
   $('#f-others').checked = !!e.canPunch;
+  A.editing = isNew ? null : e.id;
+  renderFaceRow();
   $('#emp-form').dataset.isNew = isNew ? '1' : '';
   $('#emp-modal').classList.remove('hidden');
   (isNew ? $('#f-id') : $('#f-name')).focus();
@@ -444,6 +450,7 @@ async function loadSettingsForm() {
   $('#set-company').value = A.settings.company;
   $('#set-fence').checked = A.settings.enforceGeofence;
   $('#set-lunch').value = A.settings.lunchMode || 'SELFIE';
+  $('#set-face').value = A.settings.faceMode || 'OFF';
   $('#set-acc').value = A.settings.maxAccuracy;
 }
 
@@ -451,7 +458,7 @@ $('#set-form').addEventListener('submit', async function (ev) {
   ev.preventDefault();
   try {
     const r = await call('adminSaveSettings', { settings: {
-      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, maxAccuracy: $('#set-acc').value,
+      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, faceMode: $('#set-face').value, maxAccuracy: $('#set-acc').value,
       newPassword: $('#set-pw').value,
     } });
     A.settings = r.settings;
@@ -460,6 +467,86 @@ $('#set-form').addEventListener('submit', async function (ev) {
     $('#h-company').textContent = (r.settings.company || 'Attendance') + ' - Admin';
     toast('Settings saved');
   } catch (e) { toast(e.message, true); }
+});
+
+/* ---------------- face registration ---------------- */
+
+function renderFaceRow() {
+  const row = $('#f-face-row');
+  const e = A.editing && A.employees.find(function (x) { return x.id === A.editing; });
+  row.classList.toggle('hidden', !e);
+  if (!e) return;
+  $('#f-face-status').innerHTML = e.hasFace
+    ? '<span class="pill ok">Face registered</span> <span class="muted">' + esc(e.faceReg) + '</span>'
+    : '<span class="pill mute">Face not registered</span> <span class="muted">(first selfie will register it)</span>';
+  $('#f-face-reset').classList.toggle('hidden', !e.hasFace);
+}
+
+const FR = { stream: null, facing: 'user' };
+$('#fr-close').innerHTML = ICONS.close;
+
+async function frStart() {
+  frStop();
+  FR.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: FR.facing, width: { ideal: 960 } }, audio: false });
+  const v = $('#fr-video');
+  v.srcObject = FR.stream;
+  v.style.transform = FR.facing === 'user' ? 'scaleX(-1)' : '';
+  await v.play().catch(function () {});
+}
+function frStop() {
+  if (FR.stream) FR.stream.getTracks().forEach(function (t) { t.stop(); });
+  FR.stream = null;
+}
+function frClose() { frStop(); $('#face-modal').classList.add('hidden'); }
+
+$('#f-face-reg').addEventListener('click', async function () {
+  const e = A.employees.find(function (x) { return x.id === A.editing; });
+  if (!e) return;
+  $('#fr-title').textContent = 'Register face: ' + e.name;
+  $('#face-modal').classList.remove('hidden');
+  loadFace().catch(function (err) { toast(err.message, true); });
+  try { await frStart(); } catch (err) { toast('Camera: ' + err.message, true); frClose(); }
+});
+$('#fr-close').addEventListener('click', frClose);
+$('#fr-flip').addEventListener('click', function () {
+  FR.facing = FR.facing === 'user' ? 'environment' : 'user';
+  frStart().catch(function (err) { toast(err.message, true); });
+});
+$('#fr-shoot').addEventListener('click', async function () {
+  const v = $('#fr-video');
+  if (!v.videoWidth) return toast('Camera is still starting', true);
+  const btn = this;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Reading face';
+  try {
+    const c = document.createElement('canvas');
+    c.width = v.videoWidth;
+    c.height = v.videoHeight;
+    c.getContext('2d').drawImage(v, 0, 0);
+    const faces = await faceDescriptors(c);
+    if (faces.length !== 1) throw new Error(faces.length ? 'More than one face found. Only the employee should be in the frame.' : 'No face found. Face the camera in good light.');
+    const r = await call('adminSaveFace', { id: A.editing, descriptor: faces[0] });
+    A.employees = r.employees;
+    renderEmployees();
+    renderFaceRow();
+    frClose();
+    toast('Face registered');
+  } catch (err) {
+    toast(err.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Capture face';
+  }
+});
+$('#f-face-reset').addEventListener('click', async function () {
+  if (!confirm('Reset this face? The next selfie will register a new one.')) return;
+  try {
+    const r = await call('adminResetFace', { id: A.editing });
+    A.employees = r.employees;
+    renderEmployees();
+    renderFaceRow();
+    toast('Face reset');
+  } catch (err) { toast(err.message, true); }
 });
 
 /* ---------------- boot ---------------- */

@@ -71,6 +71,14 @@ function applyStatus(r, t0) {
   setTZ(r.tz);
   store.set('att_company', r.company);
   renderHome();
+  if (faceOn()) loadFace().catch(function () {}); // download the face models early
+}
+
+function faceText(f) {
+  if (f === 'Registered') return 'registered now';
+  if (/^Match/.test(f)) return 'matched ' + f.replace('Match ', '');
+  if (/^NO MATCH/.test(f)) return 'did not match, admin will review';
+  return f.toLowerCase();
 }
 
 function logout(msg) {
@@ -369,12 +377,47 @@ $('#btn-retake').addEventListener('click', async function () {
   try { await startStream(); } catch (e) { toast(e.message, true); closeCamera(); }
 });
 
-function capture() {
+function faceOn() { return S.data && S.data.faceMode && S.data.faceMode !== 'OFF'; }
+
+async function capture() {
   const v = $('#video');
   if (!v.videoWidth || !S.fix) { toast('Camera is still starting, try again', true); return; }
   const MAX = 1080;
   const k = Math.min(1, MAX / Math.max(v.videoWidth, v.videoHeight));
   const W = Math.round(v.videoWidth * k), H = Math.round(v.videoHeight * k);
+
+  // freeze the frame un-mirrored; faces are read from this copy
+  const raw = document.createElement('canvas');
+  raw.width = W;
+  raw.height = H;
+  raw.getContext('2d').drawImage(v, 0, 0, W, H);
+
+  S.faces = [];
+  S.faceError = false;
+  if (faceOn()) {
+    const shoot = $('#btn-shoot');
+    shoot.disabled = true;
+    $('#cam-title').dataset.title = $('#cam-title').dataset.title || $('#cam-title').textContent;
+    $('#cam-title').textContent = 'Checking face...';
+    try {
+      S.faces = await faceDescriptors(raw);
+    } catch (e) {
+      S.faceError = true;
+      if (S.data.faceMode === 'REQUIRED') toast(e.message, true);
+    }
+    $('#cam-title').textContent = $('#cam-title').dataset.title;
+    delete $('#cam-title').dataset.title;
+    updateGeoUI();
+    const need = Math.max(1, S.targets.length);
+    if (S.data.faceMode === 'REQUIRED' && !S.faceError && S.faces.length < need) {
+      toast(S.faces.length
+        ? 'Only ' + S.faces.length + ' of ' + need + ' faces found. Everyone must face the camera.'
+        : 'No face found. Look straight at the camera in good light.', true);
+      return; // camera stays live for another try
+    }
+    if (S.data.faceMode === 'REQUIRED' && S.faceError) return;
+  }
+
   const c = $('#canvas');
   c.width = W;
   c.height = H;
@@ -384,7 +427,7 @@ function capture() {
     ctx.translate(W, 0);
     ctx.scale(-1, 1); // same mirror view the person saw while taking a selfie
   }
-  ctx.drawImage(v, 0, 0, W, H);
+  ctx.drawImage(raw, 0, 0, W, H);
   ctx.restore();
   S.stampTime = now();
   drawStamp(ctx, W, H);
@@ -524,6 +567,7 @@ $('#btn-submit').addEventListener('click', async function () {
       address: p.address || '', photo: S.photo, thumb: S.thumb,
       deviceTime: new Date().toISOString(), device: navigator.userAgent,
       forEmpIds: S.targets.map(function (t) { return t.id; }),
+      faces: S.faces || [], faceError: !!S.faceError,
     });
     if (S.watchId !== null) navigator.geolocation.clearWatch(S.watchId);
     S.watchId = null;
@@ -534,13 +578,17 @@ $('#btn-submit').addEventListener('click', async function () {
     if (forOthers) {
       $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(now()) +
         (r.punchedFor.length > 1 ? ' · ' + r.punchedFor.length + ' people' : '');
-      $('#done-sub').textContent = 'Saved for ' + r.punchedFor.map(function (t) { return t.name; }).join(', ') + '.';
+      $('#done-sub').textContent = 'Saved for ' + r.punchedFor.map(function (t) {
+        return t.name + (t.face ? ' (face: ' + faceText(t.face) + ')' : '');
+      }).join(', ') + '.';
     } else {
       const last = r.punches[r.punches.length - 1];
+      const f = r.punchedFor && r.punchedFor[0] && r.punchedFor[0].face;
       $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(last ? last.ts : now());
-      $('#done-sub').textContent = S.type === 'OUT'
+      $('#done-sub').textContent = (S.type === 'OUT'
         ? 'Worked ' + dur(r.summary.workedMin) + ' today. Have a good evening!'
-        : (S.type === 'IN' && r.summary.late ? 'Marked late by ' + dur(r.summary.late) + '.' : 'Saved successfully.');
+        : (S.type === 'IN' && r.summary.late ? 'Marked late by ' + dur(r.summary.late) + '.' : 'Saved successfully.')) +
+        (f ? ' Face: ' + faceText(f) + '.' : '');
     }
     S.targets = [];
     show('v-done');

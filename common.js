@@ -101,6 +101,42 @@ const ICONS = {
 };
 const LABELS = { IN: 'Check In', LUNCH_OUT: 'Lunch Out', LUNCH_IN: 'Lunch In', OUT: 'Check Out' };
 
+/* ---------- face recognition (runs on the phone; only numbers are sent) ---------- */
+const FACE_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15';
+let faceLoading = null;
+
+function loadFace() {
+  if (faceLoading) return faceLoading;
+  faceLoading = new Promise(function (resolve, reject) {
+    if (window.faceapi) return resolve();
+    const s = document.createElement('script');
+    s.src = FACE_CDN + '/dist/face-api.js';
+    s.onload = resolve;
+    s.onerror = function () { reject(new Error('Could not load face check. Check the internet.')); };
+    document.head.appendChild(s);
+  }).then(function () {
+    const m = FACE_CDN + '/model';
+    return Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(m),
+      faceapi.nets.faceLandmark68TinyNet.loadFromUri(m),
+      faceapi.nets.faceRecognitionNet.loadFromUri(m),
+    ]);
+  });
+  faceLoading.catch(function () { faceLoading = null; });
+  return faceLoading;
+}
+
+/** Returns one 128-number descriptor per face found, biggest face first. */
+async function faceDescriptors(img) {
+  await loadFace();
+  const found = await faceapi
+    .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.45 }))
+    .withFaceLandmarks(true)
+    .withFaceDescriptors();
+  found.sort(function (a, b) { return b.detection.box.area - a.detection.box.area; });
+  return found.map(function (f) { return Array.from(f.descriptor, function (v) { return Math.round(v * 1e4) / 1e4; }); });
+}
+
 /* ---------- install as an app (home-screen web app) ---------- */
 (function setupInstall() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});

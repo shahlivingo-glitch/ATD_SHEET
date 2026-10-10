@@ -11,10 +11,10 @@
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
-  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers'];
+  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered'];
 const PUNCH_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Action', 'Latitude', 'Longitude',
   'AccuracyM', 'Address', 'Location', 'InsideFence', 'DistanceM', 'PhotoURL', 'PhotoID',
-  'ThumbID', 'DeviceTime', 'Device', 'PunchedBy'];
+  'ThumbID', 'DeviceTime', 'Device', 'PunchedBy', 'FaceMatch'];
 const LOC_COLS = ['Name', 'Latitude', 'Longitude', 'RadiusM'];
 const HOL_COLS = ['Date', 'Name'];
 
@@ -24,6 +24,8 @@ const DEFAULT_SETTINGS = [
   ['ENFORCE_GEOFENCE', 'FALSE', 'TRUE = block punches made outside the radius of the Locations tab'],
   ['MAX_ACCURACY_M', '200', 'Reject GPS fixes less accurate than this many metres (0 = accept any)'],
   ['PHOTO_FOLDER_ID', '', 'Drive folder for selfies (created by setup)'],
+  ['FACE_MODE', 'OFF', 'Face recognition: OFF, WARN (record matches only) or REQUIRED (block punches when the face does not match)'],
+  ['FACE_THRESHOLD', '0.5', 'Face match strictness: lower = stricter (0.4 strict, 0.5 normal, 0.6 loose)'],
   ['LUNCH_MODE', 'SELFIE', 'SELFIE = staff take Lunch Out / Lunch In selfies. AUTO = no lunch selfie, lunch minutes are deducted automatically'],
 ];
 
@@ -77,7 +79,7 @@ function onOpen() {
 /** Adds columns introduced by newer versions to the existing sheets, so updating needs no re-run of setup. */
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
-  if (cache.get('schema') === '2') return;
+  if (cache.get('schema') === '3') return;
   const ss = SpreadsheetApp.getActive();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
@@ -90,7 +92,7 @@ function ensureSchema_() {
       }
     });
   });
-  cache.put('schema', '2', 21600);
+  cache.put('schema', '3', 21600);
 }
 
 function ensureSheet_(ss, name, cols, textCols) {
@@ -135,6 +137,8 @@ const ROUTES = {
   adminSaveSettings: adminSaveSettings_,
   adminThumbs: adminThumbs_,
   adminPhoto: adminPhoto_,
+  adminSaveFace: adminSaveFace_,
+  adminResetFace: adminResetFace_,
 };
 
 function doPost(e) {
@@ -240,6 +244,8 @@ function punch_(req) {
     }
   }
 
+  const face = checkFaces_(targets, cleanFaces_(req.faces), forOthers, req.faceError);
+
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
@@ -273,16 +279,17 @@ function punch_(req) {
         now, txt_(states[i].workDate), txt_(t.id), txt_(t.name), LABEL[type], lat, lng, acc, txt_(address),
         txt_(f.name), f.has ? (f.inside ? 'Yes' : 'No') : '', f.has ? f.distance : '',
         file.getUrl(), file.getId(), thumbId, txt_(String(req.deviceTime || '').slice(0, 40)),
-        txt_(String(req.device || '').slice(0, 150)), txt_(by),
+        txt_(String(req.device || '').slice(0, 150)), txt_(by), face.results[i],
       ];
     });
     const sh = sheet_(SH.PUNCH);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+    Object.keys(face.enroll).forEach(function (id) { saveFace_(id, face.enroll[id], 'first selfie'); });
   } finally {
     lock.releaseLock();
   }
   const res = statusFor_(me);
-  res.punchedFor = targets.map(function (t) { return { id: t.id, name: t.name }; });
+  res.punchedFor = targets.map(function (t, i) { return { id: t.id, name: t.name, face: face.results[i] }; });
   return res;
 }
 
@@ -298,8 +305,10 @@ function statusFor_(e) {
     profile: {
       id: e.id, name: e.name, dept: e.dept, shiftStart: e.shiftStart, shiftEnd: e.shiftEnd,
       lunch: e.lunch, grace: e.grace, weeklyOff: e.weeklyOff, canPunchOthers: e.canPunch,
+      hasFace: !!e.faceData,
     },
     lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE',
+    faceMode: faceMode_(),
     workDate: st.workDate,
     punches: st.punches.map(publicPunch_),
     next: st.next,
@@ -373,7 +382,14 @@ function adminReport_(req) {
 
 function adminEmployees_(req) {
   authAdmin_(req.token);
-  return { employees: employees_().map(function (e) { delete e.row; return e; }), locations: locations_() };
+  return {
+    employees: employees_().map(function (e) {
+      e.hasFace = !!e.faceData;
+      delete e.row; delete e.faceData;
+      return e;
+    }),
+    locations: locations_(),
+  };
 }
 
 function adminSaveEmployee_(req) {
@@ -461,6 +477,7 @@ function adminSaveSettings_(req) {
   const x = req.settings || {};
   if (x.company !== undefined) setSetting_('COMPANY_NAME', String(x.company).trim().slice(0, 60));
   if (x.enforceGeofence !== undefined) setSetting_('ENFORCE_GEOFENCE', x.enforceGeofence ? 'TRUE' : 'FALSE');
+  if (x.faceMode !== undefined) setSetting_('FACE_MODE', /^(WARN|REQUIRED)$/.test(x.faceMode) ? x.faceMode : 'OFF');
   if (x.lunchMode !== undefined) setSetting_('LUNCH_MODE', x.lunchMode === 'AUTO' ? 'AUTO' : 'SELFIE');
   if (x.maxAccuracy !== undefined) setSetting_('MAX_ACCURACY_M', String(Math.max(0, Math.round(num_(x.maxAccuracy, 0)))));
   const out = { settings: publicSettings_() };
@@ -532,6 +549,108 @@ function buildReport_(from, to, empId) {
     totals.push(t);
   });
   return { from: from, to: to, days: days, totals: totals };
+}
+
+/* ------------------------------------------------------------------ face recognition */
+
+function faceMode_() {
+  const m = String(settings_().FACE_MODE || 'OFF').toUpperCase();
+  return m === 'WARN' || m === 'REQUIRED' ? m : 'OFF';
+}
+
+/** Face descriptors arrive as arrays of 128 numbers computed on the phone. */
+function cleanFaces_(faces) {
+  if (!Array.isArray(faces)) return [];
+  return faces.slice(0, 60).filter(function (f) {
+    return Array.isArray(f) && f.length === 128 && f.every(function (v) { return typeof v === 'number' && isFinite(v) && Math.abs(v) < 2; });
+  });
+}
+
+function parseFace_(v) {
+  const s = String(v || '').trim();
+  if (!s || s[0] !== '[') return null;
+  try { const f = cleanFaces_([JSON.parse(s)]); return f.length ? f[0] : null; } catch (e) { return null; }
+}
+
+function faceDist_(a, b) {
+  let sum = 0;
+  for (let i = 0; i < 128; i++) { const d = a[i] - b[i]; sum += d * d; }
+  return Math.sqrt(sum);
+}
+
+/** Distance to a friendly percentage: the match threshold shows as 70%. */
+function facePct_(d, thr) {
+  const p = d <= thr ? 100 - (d / thr) * 30 : 70 - ((d - thr) / thr) * 140;
+  return Math.max(0, Math.min(100, Math.round(p)));
+}
+
+/**
+ * Compares the faces found in the photo with each employee's registered face.
+ * Returns a result text per employee, and faces to register for people who have none yet.
+ */
+function checkFaces_(targets, faces, forOthers, faceError) {
+  const mode = faceMode_();
+  const out = { results: targets.map(function () { return ''; }), enroll: {} };
+  if (mode === 'OFF') return out;
+  const thr = num_(settings_().FACE_THRESHOLD, 0.5);
+  const used = {};
+  targets.forEach(function (t, i) {
+    if (!faces.length) { out.results[i] = faceError ? 'Face check failed' : 'No face'; return; }
+    if (!t.faceData) {
+      if (targets.length === 1 && faces.length === 1) { out.enroll[t.id] = faces[0]; out.results[i] = 'Registered'; }
+      else out.results[i] = 'Not registered';
+      return;
+    }
+    let best = 99, bj = -1;
+    faces.forEach(function (f, j) {
+      if (used[j]) return;
+      const d = faceDist_(f, t.faceData);
+      if (d < best) { best = d; bj = j; }
+    });
+    if (bj >= 0 && best <= thr) { used[bj] = true; out.results[i] = 'Match ' + facePct_(best, thr) + '%'; }
+    else out.results[i] = 'NO MATCH' + (bj >= 0 ? ' ' + facePct_(best, thr) + '%' : '');
+  });
+  if (mode === 'REQUIRED') {
+    if (!faces.length) {
+      throw new Error(faceError ? 'Face check could not start. Check the internet and try again.' : 'No face found in the photo. Look straight at the camera in good light.');
+    }
+    const bad = targets.filter(function (t, i) { return /^NO MATCH/.test(out.results[i]); });
+    if (bad.length) {
+      throw new Error(forOthers
+        ? 'Face does not match for ' + names_(bad) + '. Make sure everyone selected is in the photo.'
+        : 'Face does not match your registered face. Try again in good light, or ask the admin to reset your face.');
+    }
+  }
+  return out;
+}
+
+function saveFace_(id, desc, how) {
+  const sh = sheet_(SH.EMP);
+  const col = headerMap_(sh);
+  const e = findEmployee_(id);
+  if (!e || col.FaceData === undefined) return;
+  sh.getRange(e.row, col.FaceData + 1).setValue(JSON.stringify(desc.map(function (v) { return Math.round(v * 1e4) / 1e4; })));
+  if (col.FaceRegistered !== undefined) sh.getRange(e.row, col.FaceRegistered + 1).setValue(txt_(fmt_(new Date(), 'yyyy-MM-dd HH:mm') + ' (' + how + ')'));
+}
+
+function adminSaveFace_(req) {
+  authAdmin_(req.token);
+  const f = cleanFaces_([req.descriptor]);
+  if (!f.length) throw new Error('No face data. Take the photo again.');
+  if (!findEmployee_(req.id)) throw new Error('Employee not found. Save the employee first.');
+  saveFace_(req.id, f[0], 'admin');
+  return adminEmployees_(req);
+}
+
+function adminResetFace_(req) {
+  authAdmin_(req.token);
+  const e = findEmployee_(req.id);
+  if (!e) throw new Error('Employee not found.');
+  const sh = sheet_(SH.EMP);
+  const col = headerMap_(sh);
+  if (col.FaceData !== undefined) sh.getRange(e.row, col.FaceData + 1).setValue('');
+  if (col.FaceRegistered !== undefined) sh.getRange(e.row, col.FaceRegistered + 1).setValue('');
+  return adminEmployees_(req);
 }
 
 /* ------------------------------------------------------------------ attendance logic */
@@ -680,6 +799,8 @@ function employees_() {
       active: !/^(no|n|false|0|inactive|left)$/i.test(String(g(r, 'Active')).trim()),
       joinDate: dstr_(g(r, 'JoinDate')),
       canPunch: /^(yes|y|true|1)$/i.test(String(g(r, 'CanPunchOthers')).trim()),
+      faceData: parseFace_(g(r, 'FaceData')),
+      faceReg: String(g(r, 'FaceRegistered')).trim(),
     });
   }
   return out;
@@ -706,7 +827,7 @@ function punches_(keep) {
       name: String(g(r, 'Name')), action: actionCode_(g(r, 'Action')), lat: g(r, 'Latitude'), lng: g(r, 'Longitude'),
       acc: g(r, 'AccuracyM'), address: String(g(r, 'Address')), location: String(g(r, 'Location')),
       inside: String(g(r, 'InsideFence')), distance: g(r, 'DistanceM'), photoId: String(g(r, 'PhotoID')),
-      thumbId: String(g(r, 'ThumbID')), by: String(g(r, 'PunchedBy')),
+      thumbId: String(g(r, 'ThumbID')), by: String(g(r, 'PunchedBy')), face: String(g(r, 'FaceMatch')),
     };
     if (keep(p)) out.push(p);
   });
@@ -718,7 +839,7 @@ function publicPunch_(p) {
   return {
     ts: p.ts.getTime(), date: p.date, empId: p.empId, name: p.name, action: p.action, label: LABEL[p.action] || p.action,
     lat: p.lat, lng: p.lng, acc: p.acc, address: p.address, location: p.location, inside: p.inside,
-    distance: p.distance, photoId: p.photoId, thumbId: p.thumbId, by: p.by,
+    distance: p.distance, photoId: p.photoId, thumbId: p.thumbId, by: p.by, face: p.face,
   };
 }
 
@@ -777,7 +898,7 @@ function setSetting_(key, value) {
 function publicSettings_() {
   const s = settings_();
   return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_(),
-    lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE' };
+    lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE', faceMode: faceMode_(), faceThreshold: num_(s.FACE_THRESHOLD, 0.5) };
 }
 
 function enforceFence_() {
