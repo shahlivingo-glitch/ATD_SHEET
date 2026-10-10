@@ -574,5 +574,4 @@ setInterval(function () { if (!document.hidden && !$('#v-home').classList.contai
   } else {
     show('v-login');
   }
-  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
 })();

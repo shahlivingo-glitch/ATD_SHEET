@@ -1,6 +1,7 @@
 // Network-first cache of the app shell so the home-screen app opens fast and updates on every deploy.
-const CACHE = 'attendance-v2';
-const SHELL = ['./', './index.html', './app.css', './common.js', './employee.js', './config.js', './icon.svg', './manifest.json'];
+const CACHE = 'attendance-v3';
+const SHELL = ['./', './index.html', './admin.html', './app.css', './common.js', './employee.js', './admin.js', './config.js',
+  './icon.svg', './icon-192.png', './tgra-logo.png', './manifest.json', './manifest-admin.json'];
 
 self.addEventListener('install', function (e) {
   e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).catch(function () {}));

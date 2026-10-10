@@ -100,3 +100,36 @@ const ICONS = {
   pin: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></svg>',
 };
 const LABELS = { IN: 'Check In', LUNCH_OUT: 'Lunch Out', LUNCH_IN: 'Lunch In', OUT: 'Check Out' };
+
+/* ---------- install as an app (home-screen web app) ---------- */
+(function setupInstall() {
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+  if (standalone) return;
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let prompt = null;
+  const buttons = function () { return document.querySelectorAll('.install-btn'); };
+  const showAll = function (on) { buttons().forEach(function (b) { b.classList.toggle('hidden', !on); }); };
+
+  window.addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    prompt = e;
+    showAll(true);
+  });
+  window.addEventListener('appinstalled', function () { prompt = null; showAll(false); toast('App installed. Open it from your home screen.'); });
+  document.addEventListener('click', async function (ev) {
+    if (!ev.target.closest('.install-btn')) return;
+    if (prompt) {
+      prompt.prompt();
+      const r = await prompt.userChoice;
+      prompt = null;
+      if (r.outcome === 'accepted') showAll(false);
+    } else if (ios) {
+      toast('iPhone: open this page in Safari, tap the Share button, then "Add to Home Screen".');
+    } else {
+      toast('Open the browser menu (⋮) and tap "Install app" or "Add to Home screen".');
+    }
+  });
+  if (ios) document.addEventListener('DOMContentLoaded', function () { showAll(true); });
+})();
