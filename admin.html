@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="robots" content="noindex">
+<link rel="icon" href="icon.svg">
+<title>Attendance Admin</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+
+<section id="v-login" class="hidden">
+  <div class="wrap">
+    <div class="login-hero">
+      <img class="logo" src="icon.svg" alt="">
+      <h1>Admin Dashboard</h1>
+      <p class="muted">Attendance management</p>
+    </div>
+    <form id="login-form" class="card stack">
+      <div>
+        <label for="admin-pw">Admin password</label>
+        <input id="admin-pw" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn block" type="submit">Log in</button>
+    </form>
+  </div>
+</section>
+
+<section id="v-main" class="hidden">
+  <header class="topbar">
+    <h1 id="h-company">Admin</h1>
+    <button class="icon-btn" id="btn-refresh" title="Refresh"></button>
+    <button class="icon-btn" id="btn-logout" title="Log out"></button>
+  </header>
+  <nav class="tabs" id="tabs">
+    <button data-tab="day" class="on">Daily</button>
+    <button data-tab="report">Reports</button>
+    <button data-tab="emps">Employees</button>
+    <button data-tab="locs">Locations &amp; Settings</button>
+  </nav>
+
+  <!-- Daily -->
+  <div class="wrap wide" id="tab-day">
+    <div class="toolbar">
+      <div><label for="day-date">Date</label><input type="date" id="day-date"></div>
+      <div><label for="day-filter">Show</label>
+        <select id="day-filter">
+          <option value="">Everyone</option>
+          <option value="in">Present / working</option>
+          <option value="late">Late</option>
+          <option value="lunch">On lunch</option>
+          <option value="missing">Absent / not in yet</option>
+        </select>
+      </div>
+      <div><label for="day-search">Search</label><input type="text" id="day-search" placeholder="Name or ID"></div>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <div class="emp-list" id="day-list"></div>
+    <p class="muted small" id="day-updated" style="text-align:center;margin-top:16px"></p>
+  </div>
+
+  <!-- Reports -->
+  <div class="wrap wide hidden" id="tab-report">
+    <div class="toolbar">
+      <div><label for="rep-from">From</label><input type="date" id="rep-from"></div>
+      <div><label for="rep-to">To</label><input type="date" id="rep-to"></div>
+      <div><label for="rep-emp">Employee</label><select id="rep-emp"><option value="">All employees</option></select></div>
+      <button class="btn" id="rep-run">Show</button>
+      <button class="btn ghost" id="rep-csv" disabled>Download CSV</button>
+    </div>
+    <div id="rep-out"><div class="empty">Pick a date range and press Show.</div></div>
+  </div>
+
+  <!-- Employees -->
+  <div class="wrap wide hidden" id="tab-emps">
+    <div class="toolbar">
+      <div><label for="emp-search">Search</label><input type="text" id="emp-search" placeholder="Name, ID or department"></div>
+      <button class="btn" id="emp-add">+ Add employee</button>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Shift</th><th class="num">Lunch</th><th class="num">Grace</th><th>Weekly off</th><th>PIN</th><th>Status</th><th></th></tr></thead>
+        <tbody id="emp-rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Locations & settings -->
+  <div class="wrap hidden" id="tab-locs">
+    <div class="card stack">
+      <h3 style="font-size:17px">Work locations</h3>
+      <p class="muted small" style="margin:0">Each punch records the nearest location and distance. Turn on "Block punches outside" below to make it strict.</p>
+      <div class="table-wrap" style="box-shadow:none">
+        <table>
+          <thead><tr><th>Name</th><th>Coordinates</th><th class="num">Radius</th><th></th></tr></thead>
+          <tbody id="loc-rows"></tbody>
+        </table>
+      </div>
+      <form id="loc-form" class="stack">
+        <div class="grid2">
+          <div><label for="loc-name">Name</label><input id="loc-name" type="text" placeholder="Head Office" required></div>
+          <div><label for="loc-radius">Radius (metres)</label><input id="loc-radius" type="number" value="100" min="10" required></div>
+          <div><label for="loc-lat">Latitude</label><input id="loc-lat" type="text" inputmode="decimal" required></div>
+          <div><label for="loc-lng">Longitude</label><input id="loc-lng" type="text" inputmode="decimal" required></div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn ghost" id="loc-here">Use my current location</button>
+          <button type="submit" class="btn">Save location</button>
+        </div>
+      </form>
+    </div>
+
+    <form class="card stack" id="set-form">
+      <h3 style="font-size:17px">Settings</h3>
+      <div><label for="set-company">Company name (shown on stamps)</label><input id="set-company" type="text"></div>
+      <label class="switch"><input type="checkbox" id="set-fence"> Block punches outside work locations</label>
+      <div><label for="set-acc">Reject GPS worse than (metres, 0 = accept any)</label><input id="set-acc" type="number" min="0"></div>
+      <div><label for="set-pw">New admin password (leave blank to keep)</label><input id="set-pw" type="password" autocomplete="new-password"></div>
+      <button class="btn" type="submit">Save settings</button>
+      <p class="muted small" style="margin:0">Holidays: add rows (Date, Name) to the <b>Holidays</b> tab of the Google Sheet.</p>
+    </form>
+  </div>
+</section>
+
+<!-- Employee editor -->
+<div class="modal hidden" id="emp-modal">
+  <form class="box stack" id="emp-form">
+    <div class="modal-head"><h3 id="emp-modal-title">Employee</h3><button type="button" class="icon-btn" data-close></button></div>
+    <div class="grid2">
+      <div><label for="f-id">Employee ID</label><input id="f-id" type="text" required maxlength="20" autocapitalize="characters"></div>
+      <div><label for="f-pin">PIN (4-8 digits)</label><input id="f-pin" type="text" inputmode="numeric" required pattern="\d{4,8}"></div>
+      <div><label for="f-name">Full name</label><input id="f-name" type="text" required></div>
+      <div><label for="f-phone">Phone</label><input id="f-phone" type="tel"></div>
+      <div><label for="f-dept">Department</label><input id="f-dept" type="text"></div>
+      <div><label for="f-locs">Allowed locations (blank = any)</label><input id="f-locs" type="text" list="loc-names" placeholder="Head Office, Factory"></div>
+      <div><label for="f-start">Shift start</label><input id="f-start" type="time" required></div>
+      <div><label for="f-end">Shift end</label><input id="f-end" type="time" required></div>
+      <div><label for="f-lunch">Lunch allowed (minutes)</label><input id="f-lunch" type="number" min="0" max="300" value="45"></div>
+      <div><label for="f-grace">Late grace (minutes)</label><input id="f-grace" type="number" min="0" max="180" value="10"></div>
+      <div><label for="f-join">Joining date</label><input id="f-join" type="date"></div>
+    </div>
+    <div>
+      <label>Weekly off</label>
+      <div class="days" id="f-off"></div>
+    </div>
+    <label class="switch"><input type="checkbox" id="f-active" checked> Active (can punch)</label>
+    <p class="muted small" style="margin:0" id="f-hint">Night shifts are fine: e.g. 22:00 to 06:00. Changing the PIN logs the employee out of their phone.</p>
+    <datalist id="loc-names"></datalist>
+    <button class="btn block" type="submit">Save employee</button>
+  </form>
+</div>
+
+<!-- Photo viewer -->
+<div class="modal hidden" id="photo-modal">
+  <div class="box">
+    <div class="modal-head"><h3 id="ph-title"></h3><button type="button" class="icon-btn" data-close></button></div>
+    <img id="ph-img" alt="Selfie">
+    <div id="ph-info" class="stack" style="margin-top:12px"></div>
+  </div>
+</div>
+
+<script src="config.js"></script>
+<script src="common.js"></script>
+<script src="admin.js"></script>
+</body>
+</html>
