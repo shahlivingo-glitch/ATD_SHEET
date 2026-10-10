@@ -61,6 +61,17 @@
     <div id="notice"></div>
     <div class="actions" id="actions"></div>
 
+    <div class="card hidden" id="team-card">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+        <h3 style="font-size:16px;flex:1">Other employees</h3>
+        <button class="btn sm ghost" id="btn-group">Group selfie</button>
+      </div>
+      <p class="muted small" style="margin:0 0 10px" id="team-hint">Take the selfie for staff who don't have a phone.</p>
+      <input type="text" id="team-search" placeholder="Search name or ID">
+      <ul class="team" id="team-list"></ul>
+      <div class="group-bar hidden" id="group-bar"></div>
+    </div>
+
     <div class="card">
       <h3 style="font-size:16px;margin-bottom:10px">Today</h3>
       <div class="stats">
@@ -82,6 +93,7 @@
       <button class="icon-btn" id="cam-close" title="Cancel"></button>
       <div class="cam-title" id="cam-title">Check In</div>
       <div class="num small" id="cam-clock"></div>
+      <button class="icon-btn" id="cam-flip" title="Switch camera"></button>
     </div>
     <div class="geo-box" id="geo-box"></div>
   </div>

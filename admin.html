@@ -115,6 +115,13 @@
     <form class="card stack" id="set-form">
       <h3 style="font-size:17px">Settings</h3>
       <div><label for="set-company">Company name (shown on stamps)</label><input id="set-company" type="text"></div>
+      <div><label for="set-lunch">Lunch break</label>
+        <select id="set-lunch">
+          <option value="SELFIE">Staff take Lunch Out / Lunch In selfie</option>
+          <option value="AUTO">No lunch selfie: deduct lunch minutes automatically</option>
+        </select>
+        <p class="muted small" style="margin:4px 0 0">Automatic: only Check In and Check Out. If someone works more than 5 hours, their lunch minutes are deducted.</p>
+      </div>
       <label class="switch"><input type="checkbox" id="set-fence"> Block punches outside work locations</label>
       <div><label for="set-acc">Reject GPS worse than (metres, 0 = accept any)</label><input id="set-acc" type="number" min="0"></div>
       <div><label for="set-pw">New admin password (leave blank to keep)</label><input id="set-pw" type="password" autocomplete="new-password"></div>
@@ -146,6 +153,7 @@
       <div class="days" id="f-off"></div>
     </div>
     <label class="switch"><input type="checkbox" id="f-active" checked> Active (can punch)</label>
+    <label class="switch"><input type="checkbox" id="f-others"> Can take selfie for other employees (shared phone &amp; group selfie)</label>
     <p class="muted small" style="margin:0" id="f-hint">Night shifts are fine: e.g. 22:00 to 06:00. Changing the PIN logs the employee out of their phone.</p>
     <datalist id="loc-names"></datalist>
     <button class="btn block" type="submit">Save employee</button>

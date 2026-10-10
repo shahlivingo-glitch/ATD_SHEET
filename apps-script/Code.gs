@@ -11,10 +11,10 @@
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
-  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate'];
+  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers'];
 const PUNCH_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Action', 'Latitude', 'Longitude',
   'AccuracyM', 'Address', 'Location', 'InsideFence', 'DistanceM', 'PhotoURL', 'PhotoID',
-  'ThumbID', 'DeviceTime', 'Device'];
+  'ThumbID', 'DeviceTime', 'Device', 'PunchedBy'];
 const LOC_COLS = ['Name', 'Latitude', 'Longitude', 'RadiusM'];
 const HOL_COLS = ['Date', 'Name'];
 
@@ -24,7 +24,11 @@ const DEFAULT_SETTINGS = [
   ['ENFORCE_GEOFENCE', 'FALSE', 'TRUE = block punches made outside the radius of the Locations tab'],
   ['MAX_ACCURACY_M', '200', 'Reject GPS fixes less accurate than this many metres (0 = accept any)'],
   ['PHOTO_FOLDER_ID', '', 'Drive folder for selfies (created by setup)'],
+  ['LUNCH_MODE', 'SELFIE', 'SELFIE = staff take Lunch Out / Lunch In selfies. AUTO = no lunch selfie, lunch minutes are deducted automatically'],
 ];
+
+/** With LUNCH_MODE = AUTO, lunch is deducted once a shift is longer than this. */
+const AUTO_LUNCH_AFTER_MIN = 300;
 
 const LABEL = { IN: 'Check In', LUNCH_OUT: 'Lunch Out', LUNCH_IN: 'Lunch In', OUT: 'Check Out' };
 const NEXT = { '': ['IN'], IN: ['LUNCH_OUT', 'OUT'], LUNCH_OUT: ['LUNCH_IN'], LUNCH_IN: ['LUNCH_OUT', 'OUT'], OUT: [] };
@@ -43,6 +47,7 @@ function setup() {
   DEFAULT_SETTINGS.forEach(function (d) {
     if (!(d[0] in have)) sheet_(SH.SET).appendRow([d[0], txt_(d[1]), d[2]]);
   });
+  SETTINGS_MEMO = null;
   const s = settings_();
   if (!s.ADMIN_PASSWORD) setSetting_('ADMIN_PASSWORD', 'admin' + Math.floor(100000 + Math.random() * 900000));
   if (!s.PHOTO_FOLDER_ID) setSetting_('PHOTO_FOLDER_ID', DriveApp.createFolder(ss.getName() + ' - Selfies').getId());
@@ -67,6 +72,25 @@ function setup() {
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Attendance').addItem('Run setup', 'setup').addToUi();
+}
+
+/** Adds columns introduced by newer versions to the existing sheets, so updating needs no re-run of setup. */
+function ensureSchema_() {
+  const cache = CacheService.getScriptCache();
+  if (cache.get('schema') === '2') return;
+  const ss = SpreadsheetApp.getActive();
+  [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
+    const sh = ss.getSheetByName(x[0]);
+    if (!sh || sh.getLastRow() === 0) return;
+    const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
+    x[1].forEach(function (c) {
+      if (head.indexOf(c) < 0) {
+        sh.getRange(1, head.length + 1).setValue(c).setFontWeight('bold').setBackground('#e6f4f1');
+        head.push(c);
+      }
+    });
+  });
+  cache.put('schema', '2', 21600);
 }
 
 function ensureSheet_(ss, name, cols, textCols) {
@@ -116,6 +140,7 @@ const ROUTES = {
 function doPost(e) {
   let out;
   try {
+    ensureSchema_();
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
     const fn = ROUTES[req.action];
     if (!fn) throw new Error('Unknown action');
@@ -153,17 +178,43 @@ function status_(req) {
 }
 
 function geocode_(req) {
-  const e = authEmp_(req.token);
+  const me = authEmp_(req.token);
+  const e = req.forEmpId ? resolveTargets_(me, [req.forEmpId])[0] : me;
   const lat = Number(req.lat), lng = Number(req.lng);
   if (!isFinite(lat) || !isFinite(lng)) throw new Error('Bad location');
   const f = fence_(e, lat, lng);
   return { address: address_(lat, lng), place: f.name || '', inside: f.inside, distance: f.distance, fenced: f.has, enforce: enforceFence_() };
 }
 
+/** Employees a punch is for: the logged-in person, or others when they may punch for others (shared phone / group selfie). */
+function resolveTargets_(me, ids) {
+  ids = (ids || []).map(function (x) { return String(x).trim().toUpperCase(); }).filter(String);
+  ids = ids.filter(function (x, i) { return ids.indexOf(x) === i; });
+  if (!ids.length || (ids.length === 1 && ids[0] === me.id.toUpperCase())) return [me];
+  if (!me.canPunch) throw new Error('You are not allowed to take selfies for other employees.');
+  if (ids.length > 50) throw new Error('A group selfie can have at most 50 employees.');
+  const all = {};
+  employees_().forEach(function (x) { all[x.id.toUpperCase()] = x; });
+  return ids.map(function (id) {
+    const t = all[id];
+    if (!t) throw new Error('Employee ' + id + ' not found.');
+    if (!t.active) throw new Error(t.name + ' is inactive.');
+    return t;
+  });
+}
+
+function names_(list, max) {
+  max = max || 3;
+  const n = list.map(function (t) { return t.name; });
+  return n.length > max ? n.slice(0, max).join(', ') + ' +' + (n.length - max) + ' more' : n.join(', ');
+}
+
 function punch_(req) {
-  const e = authEmp_(req.token);
+  const me = authEmp_(req.token);
   const type = String(req.type || '');
   if (!LABEL[type]) throw new Error('Unknown punch type');
+  const targets = resolveTargets_(me, req.forEmpIds || (req.forEmpId ? [req.forEmpId] : []));
+  const forOthers = !(targets.length === 1 && targets[0].id === me.id);
 
   const m = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.photo || ''));
   if (!m) throw new Error('A selfie is required.');
@@ -179,66 +230,118 @@ function punch_(req) {
   if (maxAcc && acc > maxAcc) {
     throw new Error('GPS is not accurate enough (±' + acc + ' m). Step near a window or outside and try again.');
   }
-  const f = fence_(e, lat, lng);
-  if (enforceFence_() && f.has && !f.inside) {
-    throw new Error('You are ' + f.distance + ' m away from ' + f.name + '. Punch from the work location.');
+  const fences = targets.map(function (t) { return fence_(t, lat, lng); });
+  if (enforceFence_()) {
+    const outside = targets.filter(function (t, i) { return fences[i].has && !fences[i].inside; });
+    if (outside.length) {
+      const f = fences[targets.indexOf(outside[0])];
+      throw new Error((forOthers ? names_(outside) + (outside.length > 1 ? ' are ' : ' is ') : 'You are ') + f.distance +
+        ' m away from ' + f.name + '. Punch from the work location.');
+    }
   }
 
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
     const now = new Date();
-    const st = empState_(e, now);
-    if (st.next.indexOf(type) < 0) {
-      throw new Error(st.next.length
-        ? 'You cannot ' + LABEL[type] + ' now. Next: ' + st.next.map(function (t) { return LABEL[t]; }).join(' or ') + '.'
-        : 'You have already checked out for this shift.');
+    const recent = recentPunches_(now);
+    const hol = holidays_();
+    const states = targets.map(function (t) { return empState_(t, now, recent, hol); });
+    const bad = targets.filter(function (t, i) { return states[i].next.indexOf(type) < 0; });
+    if (bad.length) {
+      const st = states[targets.indexOf(bad[0])];
+      if (!forOthers) {
+        throw new Error(st.next.length
+          ? 'You cannot ' + LABEL[type] + ' now. Next: ' + st.next.map(function (t) { return LABEL[t]; }).join(' or ') + '.'
+          : 'You have already checked out for this shift.');
+      }
+      throw new Error('Cannot ' + LABEL[type] + ' for ' + names_(bad) + ' now. Refresh the list and try again.');
     }
     const stamp = fmt_(now, 'yyyy-MM-dd_HHmmss');
+    const base = (targets.length > 1 ? 'GROUP' + targets.length : targets[0].id) + '_' + stamp + '_' + type;
     const folder = monthFolder_(now);
-    const file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg',
-      e.id + '_' + stamp + '_' + type + '.jpg'));
-    file.setDescription(e.name + ' - ' + LABEL[type] + ' - ' + fmt_(now, 'dd MMM yyyy HH:mm:ss') + ' - ' + lat + ',' + lng);
+    const file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg', base + '.jpg'));
+    file.setDescription(names_(targets, 999) + ' - ' + LABEL[type] + ' - ' + fmt_(now, 'dd MMM yyyy HH:mm:ss') + ' - ' +
+      lat + ',' + lng + (forOthers ? ' - taken by ' + me.name + ' (' + me.id + ')' : ''));
     let thumbId = '';
-    if (tm) {
-      thumbId = thumbFolder_(folder).createFile(Utilities.newBlob(Utilities.base64Decode(tm[1]), 'image/jpeg',
-        e.id + '_' + stamp + '_' + type + '_t.jpg')).getId();
-    }
+    if (tm) thumbId = thumbFolder_(folder).createFile(Utilities.newBlob(Utilities.base64Decode(tm[1]), 'image/jpeg', base + '_t.jpg')).getId();
     const address = String(req.address || '').slice(0, 300) || address_(lat, lng);
-    sheet_(SH.PUNCH).appendRow([
-      now, txt_(st.workDate), txt_(e.id), txt_(e.name), LABEL[type], lat, lng, acc, txt_(address),
-      txt_(f.name), f.has ? (f.inside ? 'Yes' : 'No') : '', f.has ? f.distance : '',
-      file.getUrl(), file.getId(), thumbId, txt_(String(req.deviceTime || '').slice(0, 40)), txt_(String(req.device || '').slice(0, 150)),
-    ]);
+    const by = forOthers ? me.id + ' - ' + me.name + (targets.length > 1 ? ' (group of ' + targets.length + ')' : '') : '';
+    const rows = targets.map(function (t, i) {
+      const f = fences[i];
+      return [
+        now, txt_(states[i].workDate), txt_(t.id), txt_(t.name), LABEL[type], lat, lng, acc, txt_(address),
+        txt_(f.name), f.has ? (f.inside ? 'Yes' : 'No') : '', f.has ? f.distance : '',
+        file.getUrl(), file.getId(), thumbId, txt_(String(req.deviceTime || '').slice(0, 40)),
+        txt_(String(req.device || '').slice(0, 150)), txt_(by),
+      ];
+    });
+    const sh = sheet_(SH.PUNCH);
+    sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
   } finally {
     lock.releaseLock();
   }
-  return statusFor_(e);
+  const res = statusFor_(me);
+  res.punchedFor = targets.map(function (t) { return { id: t.id, name: t.name }; });
+  return res;
 }
 
 function statusFor_(e) {
   const now = new Date();
-  const st = empState_(e, now);
-  return {
+  const recent = recentPunches_(now);
+  const hol = holidays_();
+  const st = empState_(e, now, recent, hol);
+  const out = {
     company: settings_().COMPANY_NAME || '',
     tz: tz_(),
     serverTime: now.getTime(),
     profile: {
       id: e.id, name: e.name, dept: e.dept, shiftStart: e.shiftStart, shiftEnd: e.shiftEnd,
-      lunch: e.lunch, grace: e.grace, weeklyOff: e.weeklyOff,
+      lunch: e.lunch, grace: e.grace, weeklyOff: e.weeklyOff, canPunchOthers: e.canPunch,
     },
+    lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE',
     workDate: st.workDate,
     punches: st.punches.map(publicPunch_),
     next: st.next,
     summary: st.summary,
   };
+  if (e.canPunch) out.team = team_(e, now, recent, hol);
+  return out;
 }
 
-function empState_(e, now) {
+/** Everyone else's current shift state, for the shared-phone list. */
+function team_(me, now, recent, hol) {
+  return employees_().filter(function (t) { return t.active && t.id !== me.id; }).map(function (t) {
+    const st = empState_(t, now, recent, hol);
+    const last = st.punches[st.punches.length - 1];
+    return {
+      id: t.id, name: t.name, dept: t.dept, shift: t.shiftStart + '-' + t.shiftEnd, next: st.next,
+      status: st.summary.status, late: st.summary.late,
+      last: last ? { label: LABEL[last.action] || last.action, ts: last.ts.getTime() } : null,
+    };
+  });
+}
+
+/** Punches new enough to belong to anyone's current shift (night shifts reach back a day). */
+function recentPunches_(now) {
+  const from = addDays_(fmt_(now, 'yyyy-MM-dd'), -2);
+  return punches_(function (p) { return p.date >= from; });
+}
+
+function empState_(e, now, recent, hol) {
   const wd = workDate_(e, now);
-  const list = punches_(function (p) { return p.empId === e.id && p.date === wd; });
+  const list = recent.filter(function (p) { return p.empId === e.id && p.date === wd; });
   const last = list.length ? list[list.length - 1].action : '';
-  return { workDate: wd, punches: list, next: NEXT[last] || [], summary: summarize_(e, wd, list, now, holidays_()) };
+  return { workDate: wd, punches: list, next: next_(last), summary: summarize_(e, wd, list, now, hol) };
+}
+
+function next_(last) {
+  const n = NEXT[last] || [];
+  return autoLunch_() ? n.filter(function (t) { return t !== 'LUNCH_OUT'; }) : n;
+}
+
+function autoLunch_() {
+  return /^auto/i.test(settings_().LUNCH_MODE || '');
 }
 
 /* ------------------------------------------------------------------ admin API */
@@ -303,6 +406,7 @@ function adminSaveEmployee_(req) {
       Department: txt_(String(x.dept || '').trim()), ShiftStart: txt_(ss), ShiftEnd: txt_(se), LunchMinutes: lunch,
       GraceMinutes: grace, WeeklyOff: txt_(String(x.weeklyOff || '').trim()),
       AllowedLocations: txt_(String(x.locations || '').trim()), Active: x.active === false ? 'No' : 'Yes',
+      CanPunchOthers: x.canPunchOthers ? 'Yes' : 'No',
       JoinDate: txt_(join || (existing ? existing.joinDate : '') || fmt_(new Date(), 'yyyy-MM-dd')),
     };
     const width = sh.getLastColumn();
@@ -357,6 +461,7 @@ function adminSaveSettings_(req) {
   const x = req.settings || {};
   if (x.company !== undefined) setSetting_('COMPANY_NAME', String(x.company).trim().slice(0, 60));
   if (x.enforceGeofence !== undefined) setSetting_('ENFORCE_GEOFENCE', x.enforceGeofence ? 'TRUE' : 'FALSE');
+  if (x.lunchMode !== undefined) setSetting_('LUNCH_MODE', x.lunchMode === 'AUTO' ? 'AUTO' : 'SELFIE');
   if (x.maxAccuracy !== undefined) setSetting_('MAX_ACCURACY_M', String(Math.max(0, Math.round(num_(x.maxAccuracy, 0)))));
   const out = { settings: publicSettings_() };
   if (x.newPassword) {
@@ -466,6 +571,11 @@ function summarize_(e, date, list, now, hol) {
   if (bo && current && !lastOut) breakMs += now - bo;
 
   const endT = lastOut ? lastOut.ts : (current && first ? now : null);
+  let autoLunch = false;
+  if (!lunchOut && first && endT && autoLunch_() && (endT - first.ts) / 60000 > AUTO_LUNCH_AFTER_MIN) {
+    breakMs = num_(e.lunch, 0) * 60000;
+    autoLunch = true;
+  }
   const workedMin = first && endT ? Math.max(0, Math.round((endT - first.ts - breakMs) / 60000)) : 0;
   const expected = Math.max(0, sh.len - num_(e.lunch, 0));
   const lateMin = first ? Math.max(0, Math.round((first.ts - schedStart) / 60000)) : 0;
@@ -494,7 +604,7 @@ function summarize_(e, date, list, now, hol) {
     lunchOut: lunchOut ? lunchOut.getTime() : null,
     lunchIn: lunchIn ? lunchIn.getTime() : null,
     workedMin: workedMin, expectedMin: expected, late: late, early: early,
-    breakMin: breakMin, lunchOver: Math.max(0, breakMin - num_(e.lunch, 0)), ot: ot,
+    breakMin: breakMin, lunchOver: Math.max(0, breakMin - num_(e.lunch, 0)), ot: ot, autoLunch: autoLunch,
   };
 }
 
@@ -569,6 +679,7 @@ function employees_() {
       weeklyOff: String(g(r, 'WeeklyOff')).trim(), locations: String(g(r, 'AllowedLocations')).trim(),
       active: !/^(no|n|false|0|inactive|left)$/i.test(String(g(r, 'Active')).trim()),
       joinDate: dstr_(g(r, 'JoinDate')),
+      canPunch: /^(yes|y|true|1)$/i.test(String(g(r, 'CanPunchOthers')).trim()),
     });
   }
   return out;
@@ -595,7 +706,7 @@ function punches_(keep) {
       name: String(g(r, 'Name')), action: actionCode_(g(r, 'Action')), lat: g(r, 'Latitude'), lng: g(r, 'Longitude'),
       acc: g(r, 'AccuracyM'), address: String(g(r, 'Address')), location: String(g(r, 'Location')),
       inside: String(g(r, 'InsideFence')), distance: g(r, 'DistanceM'), photoId: String(g(r, 'PhotoID')),
-      thumbId: String(g(r, 'ThumbID')),
+      thumbId: String(g(r, 'ThumbID')), by: String(g(r, 'PunchedBy')),
     };
     if (keep(p)) out.push(p);
   });
@@ -607,7 +718,7 @@ function publicPunch_(p) {
   return {
     ts: p.ts.getTime(), date: p.date, empId: p.empId, name: p.name, action: p.action, label: LABEL[p.action] || p.action,
     lat: p.lat, lng: p.lng, acc: p.acc, address: p.address, location: p.location, inside: p.inside,
-    distance: p.distance, photoId: p.photoId, thumbId: p.thumbId,
+    distance: p.distance, photoId: p.photoId, thumbId: p.thumbId, by: p.by,
   };
 }
 
@@ -639,10 +750,14 @@ function holidays_() {
   return out;
 }
 
+let SETTINGS_MEMO = null;
+
 function settings_() {
+  if (SETTINGS_MEMO) return SETTINGS_MEMO;
   const sh = SpreadsheetApp.getActive().getSheetByName(SH.SET);
   const out = {};
   if (!sh) return out;
+  SETTINGS_MEMO = out;
   sh.getDataRange().getValues().slice(1).forEach(function (r) {
     if (String(r[0]).trim()) out[String(r[0]).trim()] = String(r[1]).trim();
   });
@@ -650,6 +765,7 @@ function settings_() {
 }
 
 function setSetting_(key, value) {
+  SETTINGS_MEMO = null;
   const sh = sheet_(SH.SET);
   const v = sh.getDataRange().getValues();
   for (let i = 1; i < v.length; i++) {
@@ -660,7 +776,8 @@ function setSetting_(key, value) {
 
 function publicSettings_() {
   const s = settings_();
-  return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_() };
+  return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_(),
+    lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE' };
 }
 
 function enforceFence_() {

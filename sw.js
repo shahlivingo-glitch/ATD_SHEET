@@ -1,5 +1,5 @@
 // Network-first cache of the app shell so the home-screen app opens fast and updates on every deploy.
-const CACHE = 'attendance-v1';
+const CACHE = 'attendance-v2';
 const SHELL = ['./', './index.html', './app.css', './common.js', './employee.js', './config.js', './icon.svg', './manifest.json'];
 
 self.addEventListener('install', function (e) {

@@ -14,6 +14,10 @@ const S = {
   photo: null,
   thumb: null,
   busy: false,
+  targets: [],         // employees this punch is for; empty = myself
+  facing: 'user',      // 'user' = front camera, 'environment' = back camera
+  group: false,        // group-selfie selection mode
+  sel: {},             // selected employee ids in group mode
 };
 
 const COLORS = { IN: '#15803d', LUNCH_OUT: '#b45309', LUNCH_IN: '#1d4ed8', OUT: '#b91c1c' };
@@ -90,7 +94,7 @@ function renderHome() {
   $('#h-status').innerHTML = statusPill(d.summary.status);
 
   const chips = ['<span class="pill info">Shift ' + esc(fmtHM(p.shiftStart)) + ' - ' + esc(fmtHM(p.shiftEnd)) + '</span>'];
-  if (p.lunch) chips.push('<span class="pill mute">Lunch ' + p.lunch + ' min</span>');
+  if (p.lunch) chips.push('<span class="pill mute">Lunch ' + p.lunch + ' min' + (d.lunchMode === 'AUTO' ? ' (auto)' : '') + '</span>');
   if (p.weeklyOff) chips.push('<span class="pill mute">Off: ' + esc(p.weeklyOff) + '</span>');
   $('#shift-row').innerHTML = chips.join('');
 
@@ -121,7 +125,89 @@ function renderHome() {
     return '<li><span class="dot ' + x.action + '"></span><div style="flex:1;min-width:0"><div><span class="t">' + fmtTime(x.ts) +
       '</span> · ' + esc(x.label) + '</div><div class="muted small">' + esc(where) + '</div></div></li>';
   }).join('') : '<li class="muted small">No punches yet for this shift.</li>';
+
+  renderTeam();
 }
+
+/* ---------------- other employees (shared phone / group selfie) ---------------- */
+
+function renderTeam() {
+  const d = S.data;
+  const card = $('#team-card');
+  if (!d.team) { card.classList.add('hidden'); return; }
+  card.classList.remove('hidden');
+  Object.keys(S.sel).forEach(function (id) {
+    const t = d.team.find(function (x) { return x.id === id; });
+    if (!t || !t.next.length) delete S.sel[id];
+  });
+  $('#btn-group').textContent = S.group ? 'Cancel group' : 'Group selfie';
+  $('#team-hint').textContent = S.group
+    ? 'Tick everyone in the photo, then choose the action below.'
+    : "Take the selfie for staff who don't have a phone.";
+
+  const q = $('#team-search').value.trim().toLowerCase();
+  const list = d.team.filter(function (t) { return !q || (t.name + ' ' + t.id + ' ' + t.dept).toLowerCase().indexOf(q) >= 0; });
+  $('#team-list').innerHTML = list.length ? list.map(function (t) {
+    const last = t.last ? t.last.label + ' ' + fmtTime(t.last.ts) : 'No punch yet';
+    let right;
+    if (S.group) {
+      right = t.next.length ? '<input type="checkbox"' + (S.sel[t.id] ? ' checked' : '') + '>' : '<span class="muted small">Done</span>';
+      return '<li class="' + (t.next.length ? 'pickable' : '') + (S.sel[t.id] ? ' picked' : '') + '" data-pick="' + esc(t.id) + '">' +
+        right + '<div class="who"><b>' + esc(t.name) + '</b><span class="muted small">' + esc(t.id) + ' · ' + esc(last) + '</span></div>' +
+        statusPill(t.status) + '</li>';
+    }
+    right = t.next.length
+      ? t.next.map(function (x) { return '<button class="mini ' + x + '" data-id="' + esc(t.id) + '" data-type="' + x + '">' + LABELS[x] + '</button>'; }).join('')
+      : '<span class="muted small">Shift complete</span>';
+    return '<li><div class="who"><b>' + esc(t.name) + '</b><span class="muted small">' + esc(t.id) + ' · ' + esc(last) + '</span></div>' +
+      statusPill(t.status) + '<div class="mini-row">' + right + '</div></li>';
+  }).join('') : '<li class="muted small">No employees found.</li>';
+  renderGroupBar();
+}
+
+function selectedTeam() {
+  return (S.data.team || []).filter(function (t) { return S.sel[t.id]; });
+}
+
+function renderGroupBar() {
+  const bar = $('#group-bar');
+  if (!S.group) { bar.classList.add('hidden'); return; }
+  bar.classList.remove('hidden');
+  const sel = selectedTeam();
+  let common = sel.length ? sel[0].next.slice() : [];
+  sel.forEach(function (t) { common = common.filter(function (x) { return t.next.indexOf(x) >= 0; }); });
+  bar.innerHTML = '<div><b>' + sel.length + ' selected</b>' +
+    (!sel.length ? ' <span class="muted small">Tick names above</span>' : '') +
+    (sel.length && !common.length ? '<div class="small" style="color:var(--bad-ink)">These people are at different steps. Select people who are all checking in, or all going to lunch, etc.</div>' : '') +
+    '</div>' + common.map(function (x) {
+      return '<button class="mini ' + x + '" data-group="' + x + '">' + LABELS[x] + ' (' + sel.length + ')</button>';
+    }).join('');
+}
+
+$('#btn-group').addEventListener('click', function () {
+  S.group = !S.group;
+  S.sel = {};
+  renderTeam();
+});
+$('#team-search').addEventListener('input', renderTeam);
+$('#team-list').addEventListener('click', function (ev) {
+  const b = ev.target.closest('.mini');
+  if (b) {
+    const t = S.data.team.find(function (x) { return x.id === b.dataset.id; });
+    if (t) openCamera(b.dataset.type, [t]);
+    return;
+  }
+  const li = ev.target.closest('li.pickable');
+  if (li && S.group) {
+    const id = li.dataset.pick;
+    if (S.sel[id]) delete S.sel[id]; else S.sel[id] = true;
+    renderTeam();
+  }
+});
+$('#group-bar').addEventListener('click', function (ev) {
+  const b = ev.target.closest('[data-group]');
+  if (b) openCamera(b.dataset.group, selectedTeam());
+});
 
 $('#actions').addEventListener('click', function (ev) {
   const b = ev.target.closest('.action');
@@ -143,10 +229,14 @@ setInterval(tick, 1000);
 
 /* ---------------- camera + location ---------------- */
 
-async function openCamera(type) {
+async function openCamera(type, targets) {
   S.type = type;
+  S.targets = targets || [];
+  S.facing = S.targets.length ? 'environment' : 'user';
   S.photo = S.thumb = null;
-  $('#cam-title').textContent = LABELS[type];
+  $('#cam-title').textContent = LABELS[type] + (S.targets.length === 1 ? ' · ' + S.targets[0].name
+    : S.targets.length > 1 ? ' · ' + S.targets.length + ' people' : '');
+  if (S.targets.length) { S.place = null; S.geocodedAt = null; } // fence depends on who it is for
   $('#preview').classList.add('hidden');
   $('#video').classList.remove('hidden');
   $('#bar-shoot').classList.remove('hidden');
@@ -165,10 +255,12 @@ async function openCamera(type) {
 
 async function startStream() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser has no camera support. Open the link in Chrome or Safari.');
+  stopStream();
   S.stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false,
+    video: { facingMode: S.facing, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false,
   });
   const v = $('#video');
+  v.classList.toggle('mirror', S.facing === 'user');
   v.srcObject = S.stream;
   await v.play().catch(function () {});
   updateGeoUI();
@@ -177,7 +269,10 @@ async function startStream() {
 function stopStream() {
   if (S.stream) S.stream.getTracks().forEach(function (t) { t.stop(); });
   S.stream = null;
+  $('#video').srcObject = null;
 }
+// the shutter must wait until the video actually has frames
+['loadedmetadata', 'playing', 'resize'].forEach(function (ev) { $('#video').addEventListener(ev, updateGeoUI); });
 
 function closeCamera() {
   stopStream();
@@ -186,6 +281,12 @@ function closeCamera() {
   show('v-home');
 }
 $('#cam-close').addEventListener('click', closeCamera);
+$('#cam-flip').innerHTML = ICONS.flip;
+$('#cam-flip').addEventListener('click', async function () {
+  if (!$('#bar-confirm').classList.contains('hidden')) return; // reviewing a photo
+  S.facing = S.facing === 'user' ? 'environment' : 'user';
+  try { await startStream(); } catch (e) { toast('Could not switch camera: ' + e.message, true); }
+});
 
 function startGeo() {
   S.geoErr = '';
@@ -219,7 +320,7 @@ async function geocode() {
   if (S.place && S.geocodedAt && distM(S.geocodedAt, f) < 40) return;
   geoBusy = true;
   try {
-    const r = await api('geocode', { token: S.token, lat: f.lat, lng: f.lng });
+    const r = await api('geocode', { token: S.token, lat: f.lat, lng: f.lng, forEmpId: S.targets.length ? S.targets[0].id : '' });
     S.place = r;
     S.geocodedAt = { lat: f.lat, lng: f.lng };
   } catch (e) {
@@ -255,7 +356,7 @@ function updateGeoUI() {
       '<div style="margin-top:4px;opacity:.9">' + esc(p && p.address ? p.address : S.fix.lat.toFixed(5) + ', ' + S.fix.lng.toFixed(5)) + '</div>';
   }
   box.innerHTML = html;
-  $('#btn-shoot').disabled = !(S.fix && S.stream);
+  $('#btn-shoot').disabled = !(S.fix && S.stream && $('#video').videoWidth);
 }
 
 $('#btn-shoot').addEventListener('click', capture);
@@ -270,7 +371,7 @@ $('#btn-retake').addEventListener('click', async function () {
 
 function capture() {
   const v = $('#video');
-  if (!v.videoWidth || !S.fix) return;
+  if (!v.videoWidth || !S.fix) { toast('Camera is still starting, try again', true); return; }
   const MAX = 1080;
   const k = Math.min(1, MAX / Math.max(v.videoWidth, v.videoHeight));
   const W = Math.round(v.videoWidth * k), H = Math.round(v.videoHeight * k);
@@ -279,8 +380,10 @@ function capture() {
   c.height = H;
   const ctx = c.getContext('2d');
   ctx.save();
-  ctx.translate(W, 0);
-  ctx.scale(-1, 1); // same mirror view the person saw while taking it
+  if (S.facing === 'user') {
+    ctx.translate(W, 0);
+    ctx.scale(-1, 1); // same mirror view the person saw while taking a selfie
+  }
   ctx.drawImage(v, 0, 0, W, H);
   ctx.restore();
   S.stampTime = now();
@@ -330,7 +433,11 @@ function drawStamp(ctx, W, H) {
   ctx.font = font(400, u * 0.95);
   const addr = wrapText(ctx, p.address || 'Address not available', maxW, 3);
   const lineH = u * 1.35;
-  const bandH = pad * 2 + u * 1.6 + lineH * 2.2 + lineH * addr.length + lineH;
+  const group = S.targets.length > 1;
+  ctx.font = font(500, u * 0.95);
+  const names = group ? wrapText(ctx, S.targets.map(function (t) { return t.name + ' (' + t.id + ')'; }).join(', '), maxW, 4) : [];
+  const byLine = S.targets.length ? 'Taken by ' + d.profile.name + ' (' + d.profile.id + ')' : '';
+  const bandH = pad * 2 + u * 1.6 + lineH * 2.2 + lineH * names.length + lineH * addr.length + lineH + (byLine ? lineH : 0);
   const y0 = H - bandH;
 
   const g = ctx.createLinearGradient(0, y0 - u * 3, 0, H);
@@ -362,8 +469,14 @@ function drawStamp(ctx, W, H) {
   // name, date-time
   ctx.fillStyle = '#fff';
   ctx.font = font(700, u * 1.25);
-  ctx.fillText(d.profile.name + '  (' + d.profile.id + ')', pad, y, maxW);
+  const who = S.targets.length === 1 ? S.targets[0] : d.profile;
+  ctx.fillText(group ? 'Group of ' + S.targets.length + ' employees' : who.name + '  (' + who.id + ')', pad, y, maxW);
   y += lineH * 1.15;
+  if (group) {
+    ctx.font = font(500, u * 0.95);
+    names.forEach(function (l) { ctx.fillText(l, pad, y, maxW); y += lineH; });
+    ctx.fillStyle = '#fff';
+  }
   ctx.font = font(700, u * 1.05);
   ctx.fillText(fmtDate(S.stampTime, false) + '   ' + fmtTime(S.stampTime, true), pad, y, maxW);
   y += lineH * 1.05;
@@ -379,6 +492,12 @@ function drawStamp(ctx, W, H) {
   let geo = f.lat.toFixed(6) + ', ' + f.lng.toFixed(6) + '  ±' + f.acc + 'm';
   if (p.fenced) geo += '  ·  ' + (p.inside ? p.place : p.distance + 'm from ' + p.place);
   ctx.fillText(geo, pad, y + u * 0.1, maxW);
+  if (byLine) {
+    y += lineH;
+    ctx.font = font(600, u * 0.85);
+    ctx.fillStyle = '#ffd27a';
+    ctx.fillText(byLine, pad, y + u * 0.1, maxW);
+  }
 }
 
 function roundRect(ctx, x, y, w, h, r) {
@@ -404,16 +523,26 @@ $('#btn-submit').addEventListener('click', async function () {
       token: S.token, type: S.type, lat: S.fix.lat, lng: S.fix.lng, acc: S.fix.acc,
       address: p.address || '', photo: S.photo, thumb: S.thumb,
       deviceTime: new Date().toISOString(), device: navigator.userAgent,
+      forEmpIds: S.targets.map(function (t) { return t.id; }),
     });
     if (S.watchId !== null) navigator.geolocation.clearWatch(S.watchId);
     S.watchId = null;
+    const forOthers = S.targets.length > 0;
+    if (forOthers) { S.group = false; S.sel = {}; }
     applyStatus(r, t0);
-    const last = r.punches[r.punches.length - 1];
     $('#done-img').src = S.photo;
-    $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(last ? last.ts : now());
-    $('#done-sub').textContent = S.type === 'OUT'
-      ? 'Worked ' + dur(r.summary.workedMin) + ' today. Have a good evening!'
-      : (S.type === 'IN' && r.summary.late ? 'Marked late by ' + dur(r.summary.late) + '.' : 'Saved successfully.');
+    if (forOthers) {
+      $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(now()) +
+        (r.punchedFor.length > 1 ? ' · ' + r.punchedFor.length + ' people' : '');
+      $('#done-sub').textContent = 'Saved for ' + r.punchedFor.map(function (t) { return t.name; }).join(', ') + '.';
+    } else {
+      const last = r.punches[r.punches.length - 1];
+      $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(last ? last.ts : now());
+      $('#done-sub').textContent = S.type === 'OUT'
+        ? 'Worked ' + dur(r.summary.workedMin) + ' today. Have a good evening!'
+        : (S.type === 'IN' && r.summary.late ? 'Marked late by ' + dur(r.summary.late) + '.' : 'Saved successfully.');
+    }
+    S.targets = [];
     show('v-done');
   } catch (e) {
     if (e.auth) { closeCamera(); return logout(e.message); }

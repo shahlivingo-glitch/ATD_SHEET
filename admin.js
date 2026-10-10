@@ -151,9 +151,11 @@ function renderDay() {
     const meta = [];
     if (x.late) meta.push('<span class="pill warn">Late ' + dur(x.late) + '</span>');
     if (x.early) meta.push('<span class="pill warn">Left ' + dur(x.early) + ' early</span>');
+    if (x.autoLunch) meta.push('<span class="pill mute">Lunch ' + dur(x.breakMin) + ' auto</span>');
     if (x.lunchOver) meta.push('<span class="pill warn">Lunch +' + dur(x.lunchOver) + '</span>');
     if (x.ot) meta.push('<span class="pill info">OT ' + dur(x.ot) + '</span>');
     if (x.in) meta.push('<span class="pill mute">Worked ' + dur(x.workedMin) + '</span>');
+    if (ps.some(function (p) { return p.by; })) meta.push('<span class="pill info">Punched on shared phone</span>');
     if (ps.length > 4) meta.push('<span class="pill mute">' + ps.length + ' punches</span>');
     return '<div class="emp-card"><div class="head"><div class="who"><b>' + esc(x.name) + '</b>' +
       '<span class="muted small">' + esc(x.id) + (x.dept ? ' · ' + esc(x.dept) : '') + ' · ' + esc(shiftText(x.shift)) + '</span></div>' +
@@ -210,6 +212,7 @@ async function openPhoto(p) {
     '<div><b>' + fmtDate(p.ts, true) + ', ' + fmtTime(p.ts, true) + '</b></div>' +
     '<div>' + esc(p.address || 'No address') + '</div>' +
     '<div class="muted small">' + p.lat + ', ' + p.lng + ' · ±' + esc(p.acc) + ' m GPS</div>' +
+    (p.by ? '<div><span class="pill warn">Taken by ' + esc(p.by) + '</span></div>' : '') +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + fence +
     '<a class="btn sm ghost" href="' + map + '" target="_blank" rel="noopener">Open in Maps</a></div>';
   $('#photo-modal').classList.remove('hidden');
@@ -303,7 +306,9 @@ function renderEmployees() {
   const q = $('#emp-search').value.trim().toLowerCase();
   const list = A.employees.filter(function (e) { return !q || (e.id + ' ' + e.name + ' ' + e.dept).toLowerCase().indexOf(q) >= 0; });
   $('#emp-rows').innerHTML = list.length ? list.map(function (e) {
-    return '<tr><td>' + esc(e.id) + '</td><td>' + esc(e.name) + '</td><td>' + esc(e.dept) + '</td><td>' + fmtHM(e.shiftStart) + ' - ' + fmtHM(e.shiftEnd) +
+    return '<tr><td>' + esc(e.id) + '</td><td>' + esc(e.name) +
+      (e.canPunch ? ' <span class="pill info" title="Can take selfies for other employees">Shared phone</span>' : '') +
+      '</td><td>' + esc(e.dept) + '</td><td>' + fmtHM(e.shiftStart) + ' - ' + fmtHM(e.shiftEnd) +
       '</td><td class="num">' + e.lunch + 'm</td><td class="num">' + e.grace + 'm</td><td>' + esc(e.weeklyOff) + '</td><td class="num">' + esc(e.pin) +
       '</td><td>' + (e.active ? '<span class="pill ok">Active</span>' : '<span class="pill mute">Inactive</span>') +
       '</td><td><button class="btn sm ghost" data-edit="' + esc(e.id) + '">Edit</button></td></tr>';
@@ -347,6 +352,7 @@ function openEmp(e) {
   const off = String(e.weeklyOff).toLowerCase();
   document.querySelectorAll('#f-off input').forEach(function (c) { c.checked = off.indexOf(c.value.toLowerCase()) >= 0; });
   $('#f-active').checked = e.active;
+  $('#f-others').checked = !!e.canPunch;
   $('#emp-form').dataset.isNew = isNew ? '1' : '';
   $('#emp-modal').classList.remove('hidden');
   (isNew ? $('#f-id') : $('#f-name')).focus();
@@ -363,7 +369,7 @@ $('#emp-form').addEventListener('submit', async function (ev) {
       shiftStart: $('#f-start').value, shiftEnd: $('#f-end').value, lunch: $('#f-lunch').value, grace: $('#f-grace').value, joinDate: $('#f-join').value,
       weeklyOff: Array.prototype.filter.call(document.querySelectorAll('#f-off input'), function (c) { return c.checked; })
         .map(function (c) { return c.value; }).join(', '),
-      active: $('#f-active').checked,
+      active: $('#f-active').checked, canPunchOthers: $('#f-others').checked,
     } });
     A.employees = r.employees;
     A.locations = r.locations;
@@ -437,6 +443,7 @@ async function loadSettingsForm() {
   }
   $('#set-company').value = A.settings.company;
   $('#set-fence').checked = A.settings.enforceGeofence;
+  $('#set-lunch').value = A.settings.lunchMode || 'SELFIE';
   $('#set-acc').value = A.settings.maxAccuracy;
 }
 
@@ -444,7 +451,7 @@ $('#set-form').addEventListener('submit', async function (ev) {
   ev.preventDefault();
   try {
     const r = await call('adminSaveSettings', { settings: {
-      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, maxAccuracy: $('#set-acc').value,
+      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, maxAccuracy: $('#set-acc').value,
       newPassword: $('#set-pw').value,
     } });
     A.settings = r.settings;
