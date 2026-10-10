@@ -1,0 +1,23 @@
+// Network-first cache of the app shell so the home-screen app opens fast and updates on every deploy.
+const CACHE = 'attendance-v1';
+const SHELL = ['./', './index.html', './app.css', './common.js', './employee.js', './config.js', './icon.svg', './manifest.json'];
+
+self.addEventListener('install', function (e) {
+  e.waitUntil(caches.open(CACHE).then(function (c) { return c.addAll(SHELL); }).catch(function () {}));
+  self.skipWaiting();
+});
+self.addEventListener('activate', function (e) {
+  e.waitUntil(caches.keys().then(function (keys) {
+    return Promise.all(keys.filter(function (k) { return k !== CACHE; }).map(function (k) { return caches.delete(k); }));
+  }));
+  self.clients.claim();
+});
+self.addEventListener('fetch', function (e) {
+  const url = new URL(e.request.url);
+  if (e.request.method !== 'GET' || url.origin !== location.origin) return; // never touch API calls
+  e.respondWith(fetch(e.request).then(function (res) {
+    const copy = res.clone();
+    caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
+    return res;
+  }).catch(function () { return caches.match(e.request); }));
+});
