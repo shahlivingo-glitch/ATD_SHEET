@@ -104,8 +104,15 @@
     </div>
     <div class="geo-box" id="geo-box"></div>
   </div>
-  <div class="cam-bar" id="bar-shoot">
+  <div class="cam-bar shoot-bar" id="bar-shoot">
+    <div class="zoom-ctl">
+      <button class="zoom-btn" id="zoom-out" aria-label="Zoom out">−</button>
+      <span class="zoom-val" id="zoom-val">1.0x</span>
+      <button class="zoom-btn" id="zoom-in" aria-label="Zoom in">+</button>
+    </div>
     <button class="shutter" id="btn-shoot" disabled aria-label="Take selfie"></button>
+    <div class="auto-hint hidden" id="auto-hint"></div>
+    <div></div>
   </div>
   <div class="cam-bar hidden" id="bar-confirm">
     <button class="btn ghost" id="btn-retake">Retake</button>
@@ -118,6 +125,7 @@
   <div class="wrap done">
     <div class="card">
       <img id="done-img" alt="Stamped selfie">
+      <div class="done-check hidden" id="done-check">✓</div>
       <div class="big" id="done-title"></div>
       <p class="muted" id="done-sub"></p>
       <button class="btn block" id="btn-done">Done</button>

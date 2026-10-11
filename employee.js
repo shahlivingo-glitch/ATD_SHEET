@@ -71,7 +71,7 @@ function applyStatus(r, t0) {
   setTZ(r.tz);
   store.set('att_company', r.company);
   renderHome();
-  if (faceOn()) loadFace().catch(function () {}); // download the face models early
+  if (anyFaceUse()) loadFace().catch(function () {}); // download the face models early
 }
 
 function faceText(f) {
@@ -237,9 +237,27 @@ setInterval(tick, 1000);
 
 /* ---------------- camera + location ---------------- */
 
+/** SELFIE (photo), FACE (face recognition only, no photo) or BOTH, as set by the admin. */
+function methodFor(type) {
+  const v = S.data && S.data.verify;
+  if (v && v[type]) return v[type];
+  return S.data && S.data.faceMode && S.data.faceMode !== 'OFF' ? 'BOTH' : 'SELFIE'; // older backend
+}
+
+function anyFaceUse() {
+  return ['IN', 'OUT', 'LUNCH_OUT', 'LUNCH_IN'].some(function (t) { return methodFor(t) !== 'SELFIE'; });
+}
+
+function faceStrict() {
+  return S.method === 'FACE' || (S.data.verify ? !!S.data.faceStrict : S.data.faceMode === 'REQUIRED');
+}
+
 async function openCamera(type, targets) {
   S.type = type;
   S.targets = targets || [];
+  S.method = methodFor(type);
+  S.auto = false;
+  S.autoPaused = false;
   S.facing = S.targets.length ? 'environment' : 'user';
   S.photo = S.thumb = null;
   $('#cam-title').textContent = LABELS[type] + (S.targets.length === 1 ? ' · ' + S.targets[0].name
@@ -249,9 +267,11 @@ async function openCamera(type, targets) {
   $('#video').classList.remove('hidden');
   $('#bar-shoot').classList.remove('hidden');
   $('#bar-confirm').classList.add('hidden');
+  setAutoUI(S.method === 'FACE' ? 'Starting face check...' : null);
   show('v-camera');
   startGeo();
-  if (faceOn()) loadFaceRefs(); // fresh each time: a first selfie may have just registered someone
+  // fresh each time: a first selfie may have just registered someone
+  const refs = faceOn() ? loadFaceRefs() : null;
   try {
     await startStream();
   } catch (e) {
@@ -259,7 +279,32 @@ async function openCamera(type, targets) {
     toast(e.name === 'NotAllowedError'
       ? 'Camera permission is blocked. Allow camera for this site in your browser settings.'
       : 'Could not open the camera: ' + e.message, true);
+    return;
   }
+  if (S.method === 'FACE') {
+    await refs;
+    const expected = S.targets.length ? S.targets : [S.data.profile];
+    const missing = expected.filter(function (t) { return !FL.refs[t.id]; });
+    if (!missing.length) {
+      S.auto = true; // punch as soon as the face is recognised, no photo
+      setAutoUI('Look at the camera');
+    } else if (expected.length === 1) {
+      setAutoUI(null); // first time: one selfie registers the face
+      toast('Face not registered yet. Take one selfie to register it.');
+    } else {
+      closeCamera();
+      toast('No registered face for ' + missing.map(function (t) { return t.name; }).join(', ') + '. Ask the admin to register them.', true);
+    }
+  }
+}
+
+/** Face-only mode replaces the shutter with a status line. */
+function setAutoUI(text, tappable) {
+  const hint = $('#auto-hint');
+  $('#btn-shoot').classList.toggle('hidden', text !== null);
+  hint.classList.toggle('hidden', text === null);
+  hint.classList.toggle('tap', !!tappable);
+  if (text !== null) hint.textContent = text;
 }
 
 async function startStream() {
@@ -272,9 +317,63 @@ async function startStream() {
   v.classList.toggle('mirror', S.facing === 'user');
   v.srcObject = S.stream;
   await v.play().catch(function () {});
+  setupZoom();
   updateGeoUI();
   startFaceLoop();
 }
+
+/* ---------------- zoom: real camera zoom where the phone supports it, digital otherwise ---------------- */
+
+const Z = { level: 1, hw: null };
+
+function camTrack() { return S.stream && S.stream.getVideoTracks()[0]; }
+
+function setupZoom() {
+  const t = camTrack();
+  const caps = t && t.getCapabilities ? t.getCapabilities() : {};
+  Z.hw = caps && caps.zoom && caps.zoom.max > caps.zoom.min ? { min: caps.zoom.min, max: Math.min(caps.zoom.max, 10) } : null;
+  const set = t && t.getSettings ? t.getSettings() : {};
+  Z.level = Z.hw ? (set.zoom || Z.hw.min) : 1;
+  applyZoomUI();
+}
+
+function zoomRange() { return Z.hw ? [Z.hw.min, Z.hw.max] : [1, 4]; }
+function digitalZoom() { return Z.hw ? 1 : Z.level; }
+
+async function setZoom(z) {
+  const r = zoomRange();
+  z = Math.min(r[1], Math.max(r[0], Math.round(z * 20) / 20));
+  if (z === Z.level) return;
+  Z.level = z;
+  if (Z.hw) {
+    try { await camTrack().applyConstraints({ advanced: [{ zoom: z }] }); } catch (e) { Z.hw = null; Z.level = Math.max(1, z); }
+  }
+  applyZoomUI();
+}
+
+function applyZoomUI() {
+  const dz = digitalZoom();
+  $('#video').style.transform = (S.facing === 'user' ? 'scaleX(-1) ' : '') + (dz !== 1 ? 'scale(' + dz + ')' : '');
+  const r = zoomRange();
+  $('#zoom-val').textContent = parseFloat(Z.level.toFixed(2)) + 'x';
+  $('#zoom-out').disabled = Z.level <= r[0];
+  $('#zoom-in').disabled = Z.level >= r[1];
+}
+
+$('#zoom-in').addEventListener('click', function () { setZoom(Z.level + (Z.level < 2 ? 0.25 : 0.5)); });
+$('#zoom-out').addEventListener('click', function () { setZoom(Z.level - (Z.level <= 2 ? 0.25 : 0.5)); });
+
+// pinch with two fingers on the camera picture
+(function () {
+  let d0 = 0, z0 = 1;
+  const stage = $('.cam-stage');
+  const dist = function (e) { return Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY); };
+  stage.addEventListener('touchstart', function (e) { if (e.touches.length === 2) { d0 = dist(e); z0 = Z.level; } }, { passive: true });
+  stage.addEventListener('touchmove', function (e) {
+    if (e.touches.length === 2 && d0 && S.stream) { e.preventDefault(); setZoom(z0 * dist(e) / d0); }
+  }, { passive: false });
+  stage.addEventListener('touchend', function () { d0 = 0; });
+})();
 
 function stopStream() {
   stopFaceLoop();
@@ -380,7 +479,7 @@ $('#btn-retake').addEventListener('click', async function () {
   try { await startStream(); } catch (e) { toast(e.message, true); closeCamera(); }
 });
 
-function faceOn() { return S.data && S.data.faceMode && S.data.faceMode !== 'OFF'; }
+function faceOn() { return !!S.method && S.method !== 'SELFIE'; }
 
 /* ---------------- live face boxes on the camera ---------------- */
 // green = recognised and expected, amber = recognised but not selected, red = not registered / not the right person
@@ -476,8 +575,15 @@ function drawFaceBoxes(found) {
     const b = f.detection.box;
     const who = classifyFace(f.descriptor);
     let x = ox + b.x * k;
-    const y = oy + b.y * k, w = b.width * k, h = b.height * k;
+    let y = oy + b.y * k, w = b.width * k, h = b.height * k;
     if (mirror) x = cw - x - w;
+    const dz = digitalZoom();
+    if (dz !== 1) {
+      x = cw / 2 + (x - cw / 2) * dz;
+      y = ch / 2 + (y - ch / 2) * dz;
+      w *= dz;
+      h *= dz;
+    }
     ctx.lineWidth = 3;
     ctx.strokeStyle = who.color;
     roundRect(ctx, x, y, w, h, 10);
@@ -497,6 +603,7 @@ function drawFaceBoxes(found) {
 
   const st = $('#face-status');
   const green = FL.last.filter(function (w) { return w.ok; });
+  maybeAutoPunch(found, green);
   if (!found.length) {
     st.textContent = 'No face - look at the camera';
     st.style.background = 'rgba(239,68,68,.85)';
@@ -514,15 +621,19 @@ function drawFaceBoxes(found) {
 async function capture() {
   const v = $('#video');
   if (!v.videoWidth || !S.fix) { toast('Camera is still starting, try again', true); return; }
+  // with digital zoom, keep only the centre part the person saw on screen
+  const dz = digitalZoom();
+  const sw = v.videoWidth / dz, sh = v.videoHeight / dz;
+  const sx = (v.videoWidth - sw) / 2, sy = (v.videoHeight - sh) / 2;
   const MAX = 1080;
-  const k = Math.min(1, MAX / Math.max(v.videoWidth, v.videoHeight));
-  const W = Math.round(v.videoWidth * k), H = Math.round(v.videoHeight * k);
+  const k = Math.min(dz > 1 ? 3 : 1, MAX / Math.max(sw, sh));
+  const W = Math.round(sw * k), H = Math.round(sh * k);
 
   // freeze the frame un-mirrored; faces are read from this copy
   const raw = document.createElement('canvas');
   raw.width = W;
   raw.height = H;
-  raw.getContext('2d').drawImage(v, 0, 0, W, H);
+  raw.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
 
   S.faces = [];
   S.faceError = false;
@@ -536,20 +647,20 @@ async function capture() {
       S.faces = await faceDescriptors(raw);
     } catch (e) {
       S.faceError = true;
-      if (S.data.faceMode === 'REQUIRED') toast(e.message, true);
+      if (faceStrict()) toast(e.message, true);
     }
     $('#cam-title').textContent = $('#cam-title').dataset.title;
     delete $('#cam-title').dataset.title;
     updateGeoUI();
     const need = Math.max(1, S.targets.length);
-    if (S.data.faceMode === 'REQUIRED' && !S.faceError && S.faces.length < need) {
+    if (faceStrict() && !S.faceError && S.faces.length < need) {
       toast(S.faces.length
         ? 'Only ' + S.faces.length + ' of ' + need + ' faces found. Everyone must face the camera.'
         : 'No face found. Look straight at the camera in good light.', true);
       startFaceLoop();
       return; // camera stays live for another try
     }
-    if (S.data.faceMode === 'REQUIRED' && S.faceError) { startFaceLoop(); return; }
+    if (faceStrict() && S.faceError) { startFaceLoop(); return; }
   }
 
   const c = $('#canvas');
@@ -687,6 +798,45 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+/** Sends the punch. photo is null for face-only punches. */
+async function sendPunch(photo, thumb, faces, faceError) {
+  const p = S.place || {};
+  const t0 = Date.now();
+  const r = await api('punch', {
+    token: S.token, type: S.type, lat: S.fix.lat, lng: S.fix.lng, acc: S.fix.acc,
+    address: p.address || '', photo: photo, thumb: thumb,
+    deviceTime: new Date().toISOString(), device: navigator.userAgent,
+    forEmpIds: S.targets.map(function (t) { return t.id; }),
+    faces: faces || [], faceError: !!faceError,
+  });
+  stopStream();
+  if (S.watchId !== null) navigator.geolocation.clearWatch(S.watchId);
+  S.watchId = null;
+  const forOthers = S.targets.length > 0;
+  if (forOthers) { S.group = false; S.sel = {}; }
+  applyStatus(r, t0);
+  $('#done-img').classList.toggle('hidden', !photo);
+  $('#done-check').classList.toggle('hidden', !!photo);
+  if (photo) $('#done-img').src = photo;
+  if (forOthers) {
+    $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(now()) +
+      (r.punchedFor.length > 1 ? ' · ' + r.punchedFor.length + ' people' : '');
+    $('#done-sub').textContent = 'Saved for ' + r.punchedFor.map(function (t) {
+      return t.name + (t.face ? ' (face: ' + faceText(t.face) + ')' : '');
+    }).join(', ') + '.';
+  } else {
+    const last = r.punches[r.punches.length - 1];
+    const f = r.punchedFor && r.punchedFor[0] && r.punchedFor[0].face;
+    $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(last ? last.ts : now());
+    $('#done-sub').textContent = (S.type === 'OUT'
+      ? 'Worked ' + dur(r.summary.workedMin) + ' today. Have a good evening!'
+      : (S.type === 'IN' && r.summary.late ? 'Marked late by ' + dur(r.summary.late) + '.' : 'Saved successfully.')) +
+      (f ? ' Face: ' + faceText(f) + '.' : '');
+  }
+  S.targets = [];
+  show('v-done');
+}
+
 $('#btn-submit').addEventListener('click', async function () {
   if (S.busy || !S.photo) return;
   S.busy = true;
@@ -694,38 +844,7 @@ $('#btn-submit').addEventListener('click', async function () {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> Saving';
   try {
-    const p = S.place || {};
-    const t0 = Date.now();
-    const r = await api('punch', {
-      token: S.token, type: S.type, lat: S.fix.lat, lng: S.fix.lng, acc: S.fix.acc,
-      address: p.address || '', photo: S.photo, thumb: S.thumb,
-      deviceTime: new Date().toISOString(), device: navigator.userAgent,
-      forEmpIds: S.targets.map(function (t) { return t.id; }),
-      faces: S.faces || [], faceError: !!S.faceError,
-    });
-    if (S.watchId !== null) navigator.geolocation.clearWatch(S.watchId);
-    S.watchId = null;
-    const forOthers = S.targets.length > 0;
-    if (forOthers) { S.group = false; S.sel = {}; }
-    applyStatus(r, t0);
-    $('#done-img').src = S.photo;
-    if (forOthers) {
-      $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(now()) +
-        (r.punchedFor.length > 1 ? ' · ' + r.punchedFor.length + ' people' : '');
-      $('#done-sub').textContent = 'Saved for ' + r.punchedFor.map(function (t) {
-        return t.name + (t.face ? ' (face: ' + faceText(t.face) + ')' : '');
-      }).join(', ') + '.';
-    } else {
-      const last = r.punches[r.punches.length - 1];
-      const f = r.punchedFor && r.punchedFor[0] && r.punchedFor[0].face;
-      $('#done-title').textContent = LABELS[S.type] + ' at ' + fmtTime(last ? last.ts : now());
-      $('#done-sub').textContent = (S.type === 'OUT'
-        ? 'Worked ' + dur(r.summary.workedMin) + ' today. Have a good evening!'
-        : (S.type === 'IN' && r.summary.late ? 'Marked late by ' + dur(r.summary.late) + '.' : 'Saved successfully.')) +
-        (f ? ' Face: ' + faceText(f) + '.' : '');
-    }
-    S.targets = [];
-    show('v-done');
+    await sendPunch(S.photo, S.thumb, S.faces, S.faceError);
   } catch (e) {
     if (e.auth) { closeCamera(); return logout(e.message); }
     toast(e.message, true);
@@ -734,6 +853,44 @@ $('#btn-submit').addEventListener('click', async function () {
     btn.disabled = false;
     btn.textContent = 'Submit';
   }
+});
+
+/* ---------------- face recognition only: no button, no photo ---------------- */
+
+function maybeAutoPunch(found, green) {
+  if (!S.auto || S.busy || S.autoPaused) return;
+  if (!S.fix) { setAutoUI('Waiting for GPS...'); FL.okStreak = 0; return; }
+  const ids = green.map(function (w) { return w.id; });
+  const ready = S.targets.length
+    ? S.targets.every(function (t) { return ids.indexOf(t.id) >= 0; })
+    : ids.length > 0;
+  FL.okStreak = ready ? (FL.okStreak || 0) + 1 : 0;
+  if (!ready) { setAutoUI(found.length ? 'Look straight at the camera' : 'Look at the camera'); return; }
+  if (FL.okStreak < 2) { setAutoUI('Hold still...'); return; }
+  autoPunch(found);
+}
+
+async function autoPunch(found) {
+  S.busy = true;
+  FL.okStreak = 0;
+  setAutoUI('Saving...');
+  const faces = found.map(function (f) { return Array.from(f.descriptor, function (v) { return Math.round(v * 1e4) / 1e4; }); });
+  try {
+    await sendPunch(null, null, faces, false);
+  } catch (e) {
+    if (e.auth) { closeCamera(); return logout(e.message); }
+    toast(e.message, true);
+    S.autoPaused = true; // don't retry in a loop; wait for a tap
+    setAutoUI('Tap to try again', true);
+  } finally {
+    S.busy = false;
+  }
+}
+
+$('#auto-hint').addEventListener('click', function () {
+  if (!S.autoPaused) return;
+  S.autoPaused = false;
+  setAutoUI('Look at the camera');
 });
 
 $('#btn-done').addEventListener('click', function () { show('v-home'); });

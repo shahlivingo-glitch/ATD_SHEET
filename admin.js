@@ -107,7 +107,8 @@ function renderDay() {
   A.punchesById = {};
   r.punches.forEach(function (p) {
     (byEmp[p.empId] = byEmp[p.empId] || []).push(p);
-    A.punchesById[p.photoId] = p;
+    p.key = p.empId + '_' + p.ts + '_' + p.action;
+    A.punchesById[p.key] = p;
   });
 
   const rows = r.rows;
@@ -144,7 +145,7 @@ function renderDay() {
       if (p && p.thumbId && !(p.thumbId in A.thumbs)) need.push(p.thumbId);
       const th = p && p.thumbId && A.thumbs[p.thumbId] ? ' style="background-image:url(' + A.thumbs[p.thumbId] + ')"' : '';
       const flag = p && p.inside === 'No' ? ' <span title="Outside location" style="color:var(--out)">!</span>' : '';
-      return '<button class="p' + (p ? ' has' : '') + '"' + (p ? ' data-photo="' + esc(p.photoId) + '"' : '') + '>' +
+      return '<button class="p' + (p ? ' has' : '') + '"' + (p ? ' data-photo="' + esc(p.key) + '"' : '') + '>' +
         '<div class="th" data-thumb="' + esc(p ? p.thumbId : '') + '"' + th + '></div>' +
         '<b>' + (p ? fmtTime(p.ts) : '--') + flag + '</b>' + LABELS[type] + '</button>';
     };
@@ -205,12 +206,14 @@ async function openPhoto(p) {
   $('#ph-title').textContent = p.name + ' · ' + p.label;
   const img = $('#ph-img');
   img.removeAttribute('src');
+  img.classList.toggle('hidden', !p.photoId);
   if (p.thumbId && A.thumbs[p.thumbId]) img.src = A.thumbs[p.thumbId];
   const map = 'https://www.google.com/maps?q=' + p.lat + ',' + p.lng;
   const fence = p.location
     ? (p.inside === 'No' ? '<span class="pill bad">Outside: ' + p.distance + ' m from ' + esc(p.location) + '</span>' : '<span class="pill ok">At ' + esc(p.location) + '</span>')
     : '';
   $('#ph-info').innerHTML =
+    (p.photoId ? '' : '<div><span class="pill info">Face recognition only, no photo saved</span></div>') +
     '<div><b>' + fmtDate(p.ts, true) + ', ' + fmtTime(p.ts, true) + '</b></div>' +
     '<div>' + esc(p.address || 'No address') + '</div>' +
     '<div class="muted small">' + p.lat + ', ' + p.lng + ' · ±' + esc(p.acc) + ' m GPS</div>' +
@@ -219,6 +222,7 @@ async function openPhoto(p) {
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + fence +
     '<a class="btn sm ghost" href="' + map + '" target="_blank" rel="noopener">Open in Maps</a></div>';
   $('#photo-modal').classList.remove('hidden');
+  if (!p.photoId) return;
   try {
     const r = await call('adminPhoto', { id: p.photoId });
     img.src = r.photo;
@@ -450,7 +454,9 @@ async function loadSettingsForm() {
   $('#set-company').value = A.settings.company;
   $('#set-fence').checked = A.settings.enforceGeofence;
   $('#set-lunch').value = A.settings.lunchMode || 'SELFIE';
-  $('#set-face').value = A.settings.faceMode || 'OFF';
+  $('#set-v-inout').value = A.settings.verifyInOut || (A.settings.faceMode && A.settings.faceMode !== 'OFF' ? 'BOTH' : 'SELFIE');
+  $('#set-v-lunch').value = A.settings.verifyLunch || $('#set-v-inout').value;
+  $('#set-strict').value = (A.settings.faceStrict !== undefined ? A.settings.faceStrict : A.settings.faceMode === 'REQUIRED') ? '1' : '0';
   $('#set-acc').value = A.settings.maxAccuracy;
 }
 
@@ -458,7 +464,7 @@ $('#set-form').addEventListener('submit', async function (ev) {
   ev.preventDefault();
   try {
     const r = await call('adminSaveSettings', { settings: {
-      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, faceMode: $('#set-face').value, maxAccuracy: $('#set-acc').value,
+      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, verifyInOut: $('#set-v-inout').value, verifyLunch: $('#set-v-lunch').value, faceStrict: $('#set-strict').value === '1', maxAccuracy: $('#set-acc').value,
       newPassword: $('#set-pw').value,
     } });
     A.settings = r.settings;

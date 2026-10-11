@@ -24,7 +24,9 @@ const DEFAULT_SETTINGS = [
   ['ENFORCE_GEOFENCE', 'FALSE', 'TRUE = block punches made outside the radius of the Locations tab'],
   ['MAX_ACCURACY_M', '200', 'Reject GPS fixes less accurate than this many metres (0 = accept any)'],
   ['PHOTO_FOLDER_ID', '', 'Drive folder for selfies (created by setup)'],
-  ['FACE_MODE', 'OFF', 'Face recognition: OFF, WARN (record matches only) or REQUIRED (block punches when the face does not match)'],
+  ['VERIFY_IN_OUT', 'SELFIE', 'Check In / Check Out: SELFIE (photo only), FACE (face recognition only, no photo) or BOTH'],
+  ['VERIFY_LUNCH', 'SELFIE', 'Lunch Out / Lunch In: SELFIE, FACE or BOTH'],
+  ['FACE_MODE', 'WARN', 'With BOTH: WARN = record a face mismatch only, REQUIRED = block the punch'],
   ['FACE_THRESHOLD', '0.5', 'Face match strictness: lower = stricter (0.4 strict, 0.5 normal, 0.6 loose)'],
   ['LUNCH_MODE', 'SELFIE', 'SELFIE = staff take Lunch Out / Lunch In selfies. AUTO = no lunch selfie, lunch minutes are deducted automatically'],
 ];
@@ -221,9 +223,10 @@ function punch_(req) {
   const targets = resolveTargets_(me, req.forEmpIds || (req.forEmpId ? [req.forEmpId] : []));
   const forOthers = !(targets.length === 1 && targets[0].id === me.id);
 
+  const method = verifyFor_(type);
   const m = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.photo || ''));
-  if (!m) throw new Error('A selfie is required.');
-  if (m[1].length > 8e6) throw new Error('Photo is too large.');
+  if (!m && method !== 'FACE') throw new Error('A selfie is required.');
+  if (m && m[1].length > 8e6) throw new Error('Photo is too large.');
   const tm = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.thumb || ''));
 
   const lat = Number(req.lat), lng = Number(req.lng), acc = Math.round(Number(req.acc) || 0);
@@ -245,7 +248,7 @@ function punch_(req) {
     }
   }
 
-  const face = checkFaces_(targets, cleanFaces_(req.faces), forOthers, req.faceError);
+  const face = checkFaces_(targets, cleanFaces_(req.faces), forOthers, req.faceError, method, !!m);
 
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
@@ -266,12 +269,12 @@ function punch_(req) {
     }
     const stamp = fmt_(now, 'yyyy-MM-dd_HHmmss');
     const base = (targets.length > 1 ? 'GROUP' + targets.length : targets[0].id) + '_' + stamp + '_' + type;
-    const folder = monthFolder_(now);
-    const file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg', base + '.jpg'));
-    file.setDescription(names_(targets, 999) + ' - ' + LABEL[type] + ' - ' + fmt_(now, 'dd MMM yyyy HH:mm:ss') + ' - ' +
+    const folder = m ? monthFolder_(now) : null;
+    const file = m ? folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg', base + '.jpg')) : null;
+    if (file) file.setDescription(names_(targets, 999) + ' - ' + LABEL[type] + ' - ' + fmt_(now, 'dd MMM yyyy HH:mm:ss') + ' - ' +
       lat + ',' + lng + (forOthers ? ' - taken by ' + me.name + ' (' + me.id + ')' : ''));
     let thumbId = '';
-    if (tm) thumbId = thumbFolder_(folder).createFile(Utilities.newBlob(Utilities.base64Decode(tm[1]), 'image/jpeg', base + '_t.jpg')).getId();
+    if (m && tm) thumbId = thumbFolder_(folder).createFile(Utilities.newBlob(Utilities.base64Decode(tm[1]), 'image/jpeg', base + '_t.jpg')).getId();
     const address = String(req.address || '').slice(0, 300) || address_(lat, lng);
     const by = forOthers ? me.id + ' - ' + me.name + (targets.length > 1 ? ' (group of ' + targets.length + ')' : '') : '';
     const rows = targets.map(function (t, i) {
@@ -279,7 +282,7 @@ function punch_(req) {
       return [
         now, txt_(states[i].workDate), txt_(t.id), txt_(t.name), LABEL[type], lat, lng, acc, txt_(address),
         txt_(f.name), f.has ? (f.inside ? 'Yes' : 'No') : '', f.has ? f.distance : '',
-        file.getUrl(), file.getId(), thumbId, txt_(String(req.deviceTime || '').slice(0, 40)),
+        file ? file.getUrl() : '', file ? file.getId() : '', thumbId, txt_(String(req.deviceTime || '').slice(0, 40)),
         txt_(String(req.device || '').slice(0, 150)), txt_(by), face.results[i],
       ];
     });
@@ -310,6 +313,8 @@ function statusFor_(e) {
     },
     lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE',
     faceMode: faceMode_(),
+    verify: { IN: verifyFor_('IN'), OUT: verifyFor_('OUT'), LUNCH_OUT: verifyFor_('LUNCH_OUT'), LUNCH_IN: verifyFor_('LUNCH_IN') },
+    faceStrict: faceStrict_(),
     workDate: st.workDate,
     punches: st.punches.map(publicPunch_),
     next: st.next,
@@ -479,6 +484,10 @@ function adminSaveSettings_(req) {
   if (x.company !== undefined) setSetting_('COMPANY_NAME', String(x.company).trim().slice(0, 60));
   if (x.enforceGeofence !== undefined) setSetting_('ENFORCE_GEOFENCE', x.enforceGeofence ? 'TRUE' : 'FALSE');
   if (x.faceMode !== undefined) setSetting_('FACE_MODE', /^(WARN|REQUIRED)$/.test(x.faceMode) ? x.faceMode : 'OFF');
+  const okV = function (v) { return /^(SELFIE|FACE|BOTH)$/.test(v) ? v : 'SELFIE'; };
+  if (x.verifyInOut !== undefined) setSetting_('VERIFY_IN_OUT', okV(x.verifyInOut));
+  if (x.verifyLunch !== undefined) setSetting_('VERIFY_LUNCH', okV(x.verifyLunch));
+  if (x.faceStrict !== undefined) setSetting_('FACE_MODE', x.faceStrict ? 'REQUIRED' : 'WARN');
   if (x.lunchMode !== undefined) setSetting_('LUNCH_MODE', x.lunchMode === 'AUTO' ? 'AUTO' : 'SELFIE');
   if (x.maxAccuracy !== undefined) setSetting_('MAX_ACCURACY_M', String(Math.max(0, Math.round(num_(x.maxAccuracy, 0)))));
   const out = { settings: publicSettings_() };
@@ -554,9 +563,28 @@ function buildReport_(from, to, empId) {
 
 /* ------------------------------------------------------------------ face recognition */
 
-function faceMode_() {
+/** How a punch type is verified: SELFIE (photo), FACE (face recognition only, no photo) or BOTH. */
+function verifyFor_(type) {
+  const key = /^LUNCH/.test(type) ? 'VERIFY_LUNCH' : 'VERIFY_IN_OUT';
+  const v = String(settings_()[key] || '').toUpperCase();
+  if (v === 'SELFIE' || v === 'FACE' || v === 'BOTH') return v;
+  return rawFaceMode_() === 'OFF' ? 'SELFIE' : 'BOTH'; // sheets set up before this setting existed
+}
+
+function rawFaceMode_() {
   const m = String(settings_().FACE_MODE || 'OFF').toUpperCase();
   return m === 'WARN' || m === 'REQUIRED' ? m : 'OFF';
+}
+
+/** With BOTH, block the punch when the face does not match (otherwise only record it). */
+function faceStrict_() {
+  return rawFaceMode_() === 'REQUIRED';
+}
+
+/** OFF when no punch type uses face recognition; kept for older app versions. */
+function faceMode_() {
+  const any = ['IN', 'LUNCH_OUT'].some(function (t) { return verifyFor_(t) !== 'SELFIE'; });
+  return !any ? 'OFF' : faceStrict_() ? 'REQUIRED' : 'WARN';
 }
 
 /** Face descriptors arrive as arrays of 128 numbers computed on the phone. */
@@ -589,10 +617,17 @@ function facePct_(d, thr) {
  * Compares the faces found in the photo with each employee's registered face.
  * Returns a result text per employee, and faces to register for people who have none yet.
  */
-function checkFaces_(targets, faces, forOthers, faceError) {
-  const mode = faceMode_();
+function checkFaces_(targets, faces, forOthers, faceError, method, hasPhoto) {
   const out = { results: targets.map(function () { return ''; }), enroll: {} };
-  if (mode === 'OFF') return out;
+  if (method === 'SELFIE') return out;
+  const strict = method === 'FACE' || faceStrict_();
+  if (method === 'FACE') {
+    // face-only punches need registered faces; a first-time photo can register one person
+    const unreg = targets.filter(function (t) { return !t.faceData; });
+    if (unreg.length && !(hasPhoto && targets.length === 1 && faces.length === 1)) {
+      throw new Error(names_(unreg) + (unreg.length > 1 ? ' have' : ' has') + ' no registered face yet. Take a selfie once, or ask the admin to register the face.');
+    }
+  }
   const thr = num_(settings_().FACE_THRESHOLD, 0.5);
   const used = {};
   targets.forEach(function (t, i) {
@@ -611,7 +646,7 @@ function checkFaces_(targets, faces, forOthers, faceError) {
     if (bj >= 0 && best <= thr) { used[bj] = true; out.results[i] = 'Match ' + facePct_(best, thr) + '%'; }
     else out.results[i] = 'NO MATCH' + (bj >= 0 ? ' ' + facePct_(best, thr) + '%' : '');
   });
-  if (mode === 'REQUIRED') {
+  if (strict) {
     if (!faces.length) {
       throw new Error(faceError ? 'Face check could not start. Check the internet and try again.' : 'No face found in the photo. Look straight at the camera in good light.');
     }
@@ -914,7 +949,8 @@ function setSetting_(key, value) {
 function publicSettings_() {
   const s = settings_();
   return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_(),
-    lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE', faceMode: faceMode_(), faceThreshold: num_(s.FACE_THRESHOLD, 0.5) };
+    lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE', faceMode: faceMode_(), faceThreshold: num_(s.FACE_THRESHOLD, 0.5),
+    verifyInOut: verifyFor_('IN'), verifyLunch: verifyFor_('LUNCH_OUT'), faceStrict: faceStrict_() };
 }
 
 function enforceFence_() {

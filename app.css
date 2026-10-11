@@ -194,6 +194,14 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px co
 .shutter { width: 76px; height: 76px; border-radius: 50%; border: 5px solid #fff; background: rgba(255,255,255,.25); cursor: pointer; }
 .shutter:disabled { opacity: .35; }
 .cam-bar .btn { min-width: 120px; }
+.shoot-bar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; justify-items: center; }
+.zoom-ctl { justify-self: start; display: flex; align-items: center; gap: 4px; background: rgba(255,255,255,.12); border-radius: 999px; padding: 4px; }
+.zoom-btn { width: 40px; height: 40px; border-radius: 50%; border: 0; background: rgba(255,255,255,.18); color: #fff; font-size: 22px; line-height: 1; cursor: pointer; }
+.zoom-btn:disabled { opacity: .35; }
+.zoom-val { min-width: 38px; text-align: center; font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.auto-hint { grid-column: 2; min-width: 160px; text-align: center; font-weight: 700; padding: 12px 18px; border-radius: 999px; background: rgba(255,255,255,.15); }
+.auto-hint.tap { background: var(--brand); cursor: pointer; }
+.done-check { width: 120px; height: 120px; margin: 8px auto 0; border-radius: 50%; background: var(--ok-bg); color: var(--ok-ink); font-size: 64px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
 .cam-bar .btn.ghost { color: #fff; border-color: #555; }
 
 .done { text-align: center; }

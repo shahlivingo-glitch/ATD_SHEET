@@ -121,18 +121,31 @@
     <form class="card stack" id="set-form">
       <h3 style="font-size:17px">Settings</h3>
       <div><label for="set-company">Company name (shown on stamps)</label><input id="set-company" type="text"></div>
-      <div><label for="set-face">Face recognition</label>
-        <select id="set-face">
-          <option value="OFF">Off</option>
-          <option value="WARN">Record only: save match result, never block</option>
-          <option value="REQUIRED">Required: block punch if the face does not match</option>
+      <div><label for="set-v-inout">Check In / Check Out</label>
+        <select id="set-v-inout">
+          <option value="SELFIE">Selfie only (photo, no face check)</option>
+          <option value="FACE">Face recognition only (no button, no photo)</option>
+          <option value="BOTH">Selfie + face recognition</option>
         </select>
-        <p class="muted small" style="margin:4px 0 0">Each employee's first selfie registers their face, or register it from Employees → Edit.</p>
+      </div>
+      <div><label for="set-v-lunch">Lunch Out / Lunch In</label>
+        <select id="set-v-lunch">
+          <option value="SELFIE">Selfie only (photo, no face check)</option>
+          <option value="FACE">Face recognition only (no button, no photo)</option>
+          <option value="BOTH">Selfie + face recognition</option>
+        </select>
+      </div>
+      <div><label for="set-strict">When the face does not match (Selfie + face)</label>
+        <select id="set-strict">
+          <option value="0">Record it only, keep the punch</option>
+          <option value="1">Block the punch</option>
+        </select>
+        <p class="muted small" style="margin:4px 0 0">Face recognition only always needs a match. Each employee's first selfie registers their face, or register it from Employees → Edit.</p>
       </div>
       <div><label for="set-lunch">Lunch break</label>
         <select id="set-lunch">
-          <option value="SELFIE">Staff take Lunch Out / Lunch In selfie</option>
-          <option value="AUTO">No lunch selfie: deduct lunch minutes automatically</option>
+          <option value="SELFIE">Staff punch Lunch Out / Lunch In</option>
+          <option value="AUTO">No lunch punch: deduct lunch minutes automatically</option>
         </select>
         <p class="muted small" style="margin:4px 0 0">Automatic: only Check In and Check Out. If someone works more than 5 hours, their lunch minutes are deducted.</p>
       </div>
