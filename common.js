@@ -23,6 +23,9 @@ async function api(action, data) {
   let j;
   try { j = await res.json(); } catch (e) { throw new Error('Server error (' + res.status + '). Please try again.'); }
   if (!j.ok) {
+    if (j.error === 'Unknown action') {
+      throw new Error('This needs the updated backend. Admin: paste the new Code.gs in Apps Script, then Deploy → Manage deployments → New version.');
+    }
     const err = new Error(String(j.error || 'Something went wrong').replace(/^AUTH:\s*/, ''));
     err.auth = /^AUTH:/.test(j.error || '');
     throw err;
