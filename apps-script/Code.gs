@@ -1,13 +1,3 @@
-/**
- * Staff Attendance — backend (Google Apps Script web app).
- *
- * Data lives in the spreadsheet this script is bound to; selfies go to a Drive folder.
- * The phone app (GitHub Pages) talks to this script by POSTing JSON as text/plain
- * (Apps Script cannot answer a CORS preflight, so never send application/json).
- *
- * First time: run setup() from the editor once and allow the permissions.
- */
-
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
@@ -31,13 +21,10 @@ const DEFAULT_SETTINGS = [
   ['LUNCH_MODE', 'SELFIE', 'SELFIE = staff take Lunch Out / Lunch In selfies. AUTO = no lunch selfie, lunch minutes are deducted automatically'],
 ];
 
-/** With LUNCH_MODE = AUTO, lunch is deducted once a shift is longer than this. */
 const AUTO_LUNCH_AFTER_MIN = 300;
 
 const LABEL = { IN: 'Check In', LUNCH_OUT: 'Lunch Out', LUNCH_IN: 'Lunch In', OUT: 'Check Out' };
 const NEXT = { '': ['IN'], IN: ['LUNCH_OUT', 'OUT'], LUNCH_OUT: ['LUNCH_IN'], LUNCH_IN: ['LUNCH_OUT', 'OUT'], OUT: [] };
-
-/* ------------------------------------------------------------------ setup */
 
 function setup() {
   const ss = SpreadsheetApp.getActive();
@@ -65,20 +52,19 @@ function setup() {
     const sh = ss.getSheetByName(n);
     if (sh && ss.getSheets().length > 1 && sh.getLastRow() === 0) ss.deleteSheet(sh);
   });
-  try { Maps.newGeocoder().reverseGeocode(19.076, 72.8777); } catch (e) { /* only here to request the permission */ }
+  try { Maps.newGeocoder().reverseGeocode(19.076, 72.8777); } catch (e) {   }
 
   const msg = 'Setup complete.\n\nAdmin password: ' + settings_().ADMIN_PASSWORD +
     '\n(Change it in the Settings tab or from the dashboard.)\n\nNow deploy: Deploy > New deployment > Web app,' +
     ' Execute as: Me, Who has access: Anyone.';
   Logger.log(msg);
-  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { /* run from the editor: see the log */ }
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {   }
 }
 
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('Attendance').addItem('Run setup', 'setup').addToUi();
 }
 
-/** Adds columns introduced by newer versions to the existing sheets, so updating needs no re-run of setup. */
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
   if (cache.get('schema') === '3') return;
@@ -104,7 +90,6 @@ function ensureSheet_(ss, name, cols, textCols) {
     sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold').setBackground('#e6f4f1');
     sh.setFrozenRows(1);
   } else {
-    // add any columns that a newer version introduced
     const head = sh.getRange(1, 1, 1, sh.getLastColumn()).getValues()[0].map(String);
     cols.forEach(function (c) {
       if (head.indexOf(c) < 0) {
@@ -120,8 +105,6 @@ function ensureSheet_(ss, name, cols, textCols) {
   });
   return sh;
 }
-
-/* ------------------------------------------------------------------ web entry points */
 
 const ROUTES = {
   login: login_,
@@ -163,8 +146,6 @@ function doGet() {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-/* ------------------------------------------------------------------ employee API */
-
 function login_(req) {
   const id = String(req.empId || '').trim();
   const pin = String(req.pin || '').trim();
@@ -193,7 +174,6 @@ function geocode_(req) {
   return { address: address_(lat, lng), place: f.name || '', inside: f.inside, distance: f.distance, fenced: f.has, enforce: enforceFence_() };
 }
 
-/** Employees a punch is for: the logged-in person, or others when they may punch for others (shared phone / group selfie). */
 function resolveTargets_(me, ids) {
   ids = (ids || []).map(function (x) { return String(x).trim().toUpperCase(); }).filter(String);
   ids = ids.filter(function (x, i) { return ids.indexOf(x) === i; });
@@ -324,7 +304,6 @@ function statusFor_(e) {
   return out;
 }
 
-/** Everyone else's current shift state, for the shared-phone list. */
 function team_(me, now, recent, hol) {
   return employees_().filter(function (t) { return t.active && t.id !== me.id; }).map(function (t) {
     const st = empState_(t, now, recent, hol);
@@ -337,7 +316,6 @@ function team_(me, now, recent, hol) {
   });
 }
 
-/** Punches new enough to belong to anyone's current shift (night shifts reach back a day). */
 function recentPunches_(now) {
   return punchesSince_(addDays_(fmt_(now, 'yyyy-MM-dd'), -2), function () { return true; });
 }
@@ -357,8 +335,6 @@ function next_(last) {
 function autoLunch_() {
   return /^auto/i.test(settings_().LUNCH_MODE || '');
 }
-
-/* ------------------------------------------------------------------ admin API */
 
 function adminLogin_(req) {
   throttle_('admin');
@@ -387,7 +363,7 @@ function adminReport_(req) {
 
 function adminEmployees_(req) {
   authAdmin_(req.token);
-  EMPLOYEES_MEMO = null; // after a save, list what is really in the sheet
+  EMPLOYEES_MEMO = null;
   return {
     employees: employees_().map(function (e) {
       e.hasFace = !!e.faceData;
@@ -545,7 +521,7 @@ function buildReport_(from, to, empId) {
     const t = { id: e.id, name: e.name, dept: e.dept, shift: e.shiftStart + '-' + e.shiftEnd, present: 0, halfDay: 0,
       absent: 0, late: 0, lateMin: 0, earlyMin: 0, workedMin: 0, otMin: 0, lunchOverMin: 0, off: 0, missedOut: 0 };
     dates.forEach(function (d) {
-      if (e.joinDate && d < e.joinDate) return; // not employed yet
+      if (e.joinDate && d < e.joinDate) return;
       const s = summarize_(e, d, byKey[e.id + '|' + d] || [], now, hol);
       s.id = e.id; s.name = e.name; s.dept = e.dept;
       days.push(s);
@@ -562,14 +538,11 @@ function buildReport_(from, to, empId) {
   return { from: from, to: to, days: days, totals: totals };
 }
 
-/* ------------------------------------------------------------------ face recognition */
-
-/** How a punch type is verified: SELFIE (photo), FACE (face recognition only, no photo) or BOTH. */
 function verifyFor_(type) {
   const key = /^LUNCH/.test(type) ? 'VERIFY_LUNCH' : 'VERIFY_IN_OUT';
   const v = String(settings_()[key] || '').toUpperCase();
   if (v === 'SELFIE' || v === 'FACE' || v === 'BOTH') return v;
-  return rawFaceMode_() === 'OFF' ? 'SELFIE' : 'BOTH'; // sheets set up before this setting existed
+  return rawFaceMode_() === 'OFF' ? 'SELFIE' : 'BOTH';
 }
 
 function rawFaceMode_() {
@@ -577,18 +550,15 @@ function rawFaceMode_() {
   return m === 'WARN' || m === 'REQUIRED' ? m : 'OFF';
 }
 
-/** With BOTH, block the punch when the face does not match (otherwise only record it). */
 function faceStrict_() {
   return rawFaceMode_() === 'REQUIRED';
 }
 
-/** OFF when no punch type uses face recognition; kept for older app versions. */
 function faceMode_() {
   const any = ['IN', 'LUNCH_OUT'].some(function (t) { return verifyFor_(t) !== 'SELFIE'; });
   return !any ? 'OFF' : faceStrict_() ? 'REQUIRED' : 'WARN';
 }
 
-/** Face descriptors arrive as arrays of 128 numbers computed on the phone. */
 function cleanFaces_(faces) {
   if (!Array.isArray(faces)) return [];
   return faces.slice(0, 60).filter(function (f) {
@@ -608,22 +578,16 @@ function faceDist_(a, b) {
   return Math.sqrt(sum);
 }
 
-/** Distance to a friendly percentage: the match threshold shows as 70%. */
 function facePct_(d, thr) {
   const p = d <= thr ? 100 - (d / thr) * 30 : 70 - ((d - thr) / thr) * 140;
   return Math.max(0, Math.min(100, Math.round(p)));
 }
 
-/**
- * Compares the faces found in the photo with each employee's registered face.
- * Returns a result text per employee, and faces to register for people who have none yet.
- */
 function checkFaces_(targets, faces, forOthers, faceError, method, hasPhoto) {
   const out = { results: targets.map(function () { return ''; }), enroll: {} };
   if (method === 'SELFIE') return out;
   const strict = method === 'FACE' || faceStrict_();
   if (method === 'FACE') {
-    // face-only punches need registered faces; a first-time photo can register one person
     const unreg = targets.filter(function (t) { return !t.faceData; });
     if (unreg.length && !(hasPhoto && targets.length === 1 && faces.length === 1)) {
       throw new Error(names_(unreg) + (unreg.length > 1 ? ' have' : ' has') + ' no registered face yet. Take a selfie once, or ask the admin to register the face.');
@@ -672,10 +636,6 @@ function saveFace_(id, desc, how) {
   EMPLOYEES_MEMO = null;
 }
 
-/**
- * Registered faces the phone needs to colour the live camera boxes: only your own face,
- * or the whole team on a shared phone. Every punch is still checked here on the server.
- */
 function faceRefs_(req) {
   const me = authEmp_(req.token);
   const refs = {};
@@ -708,15 +668,10 @@ function adminResetFace_(req) {
   return adminEmployees_(req);
 }
 
-/* ------------------------------------------------------------------ attendance logic */
-
-/** Shift in minutes from midnight. Night shifts (end before start) cross midnight. */
 function shift_(e) {
   const s = toMin_(e.shiftStart), en = toMin_(e.shiftEnd);
   let len = (en - s + 1440) % 1440;
   if (len === 0) len = 1440;
-  // The "day" of a shift starts halfway through the off-hours before it, so a late
-  // check-out after midnight or an early check-in still lands on the right shift.
   return { start: s, end: en, len: len, windowStart: s - (1440 - len) / 2 };
 }
 
@@ -816,12 +771,10 @@ function address_(lat, lng) {
   try {
     const r = Maps.newGeocoder().reverseGeocode(lat, lng);
     a = (r && r.results && r.results[0] && r.results[0].formatted_address) || '';
-  } catch (err) { /* quota or network: the stamp falls back to coordinates */ }
+  } catch (err) {   }
   if (a) cache.put(key, a, 21600);
   return a;
 }
-
-/* ------------------------------------------------------------------ data access */
 
 function sheet_(name) {
   const sh = SpreadsheetApp.getActive().getSheetByName(name);
@@ -839,7 +792,6 @@ let EMPLOYEES_MEMO = null;
 
 function employees_() {
   if (!EMPLOYEES_MEMO) EMPLOYEES_MEMO = readEmployees_();
-  // copies, so callers can delete fields without touching the memo
   return EMPLOYEES_MEMO.map(function (e) { return Object.assign({}, e); });
 }
 
@@ -875,18 +827,13 @@ function findEmployee_(id) {
   return employees_().filter(function (e) { return e.id.toUpperCase() === id; })[0] || null;
 }
 
-/**
- * Punches with WorkDate on or after `from`. Rows are added in time order, so this reads
- * from the bottom of the sheet in growing chunks and stops once it is past `from`;
- * the punch is fast no matter how many months of history the sheet holds.
- */
 function punchesSince_(from, keep) {
   const sh = sheet_(SH.PUNCH);
   const last = sh.getLastRow();
   if (last < 2) return [];
   const c = headerMap_(sh);
   const width = sh.getLastColumn();
-  const stop = addDays_(from, -2); // margin for night shifts and late check-outs
+  const stop = addDays_(from, -2);
   let rows = [], end = last, chunk = 600;
   while (end >= 2) {
     const start = Math.max(2, end - chunk + 1);
@@ -1011,8 +958,6 @@ function thumbFolder_(month) {
   return it.hasNext() ? it.next() : month.createFolder('thumbs');
 }
 
-/* ------------------------------------------------------------------ auth */
-
 function secret_() {
   const p = PropertiesService.getScriptProperties();
   let s = p.getProperty('SECRET');
@@ -1073,8 +1018,6 @@ function failed_(key) {
   c.put('fail:' + key, String(Number(c.get('fail:' + key) || 0) + 1), 900);
 }
 
-/* ------------------------------------------------------------------ helpers */
-
 function tz_() {
   return SpreadsheetApp.getActive().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
 }
@@ -1096,7 +1039,7 @@ function dstr_(v) {
   const s = String(v || '').trim();
   let m = /^(\d{4})-(\d{1,2})-(\d{1,2})/.exec(s);
   if (m) return m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
-  m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s); // dd/mm/yyyy
+  m = /^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);
   if (m) return m[3] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[1]).slice(-2);
   return '';
 }
@@ -1133,7 +1076,6 @@ function num_(v, d) {
   return v === '' || v === null || !isFinite(n) ? d : n;
 }
 
-/** Leading apostrophe stops Sheets turning "0123", "09:00" or "2026-10-10" into numbers/dates. */
 function txt_(v) {
   v = String(v === undefined || v === null ? '' : v);
   return v === '' ? '' : "'" + v;
