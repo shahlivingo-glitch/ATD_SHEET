@@ -339,8 +339,7 @@ function team_(me, now, recent, hol) {
 
 /** Punches new enough to belong to anyone's current shift (night shifts reach back a day). */
 function recentPunches_(now) {
-  const from = addDays_(fmt_(now, 'yyyy-MM-dd'), -2);
-  return punches_(function (p) { return p.date >= from; });
+  return punchesSince_(addDays_(fmt_(now, 'yyyy-MM-dd'), -2), function () { return true; });
 }
 
 function empState_(e, now, recent, hol) {
@@ -375,7 +374,7 @@ function adminDay_(req) {
   authAdmin_(req.token);
   const date = dateParam_(req.date) || fmt_(new Date(), 'yyyy-MM-dd');
   const rep = buildReport_(date, date, '');
-  const punches = punches_(function (p) { return p.date === date; }).map(publicPunch_);
+  const punches = punchesSince_(date, function (p) { return p.date === date; }).map(publicPunch_);
   return { date: date, rows: rep.days, punches: punches, settings: publicSettings_(), serverTime: Date.now() };
 }
 
@@ -388,6 +387,7 @@ function adminReport_(req) {
 
 function adminEmployees_(req) {
   authAdmin_(req.token);
+  EMPLOYEES_MEMO = null; // after a save, list what is really in the sheet
   return {
     employees: employees_().map(function (e) {
       e.hasFace = !!e.faceData;
@@ -419,7 +419,8 @@ function adminSaveEmployee_(req) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    const sh = sheet_(SH.EMP);
+    EMPLOYEES_MEMO = null;
+  const sh = sheet_(SH.EMP);
     const col = headerMap_(sh);
     const existing = findEmployee_(id);
     if (x.isNew && existing) throw new Error('Employee ID ' + id + ' already exists.');
@@ -530,7 +531,7 @@ function buildReport_(from, to, empId) {
     if (dates.length > 93) throw new Error('Choose at most 3 months at a time.');
   }
   const hol = holidays_();
-  const all = punches_(function (p) { return p.date >= from && p.date <= to && (!empId || p.empId === empId); });
+  const all = punchesSince_(from, function (p) { return p.date <= to && (!empId || p.empId === empId); });
   const byKey = {};
   all.forEach(function (p) { (byKey[p.empId + '|' + p.date] = byKey[p.empId + '|' + p.date] || []).push(p); });
   const emps = employees_().filter(function (e) {
@@ -661,12 +662,14 @@ function checkFaces_(targets, faces, forOthers, faceError, method, hasPhoto) {
 }
 
 function saveFace_(id, desc, how) {
+  EMPLOYEES_MEMO = null;
   const sh = sheet_(SH.EMP);
   const col = headerMap_(sh);
   const e = findEmployee_(id);
   if (!e || col.FaceData === undefined) return;
   sh.getRange(e.row, col.FaceData + 1).setValue(JSON.stringify(desc.map(function (v) { return Math.round(v * 1e4) / 1e4; })));
   if (col.FaceRegistered !== undefined) sh.getRange(e.row, col.FaceRegistered + 1).setValue(txt_(fmt_(new Date(), 'yyyy-MM-dd HH:mm') + ' (' + how + ')'));
+  EMPLOYEES_MEMO = null;
 }
 
 /**
@@ -697,6 +700,7 @@ function adminResetFace_(req) {
   authAdmin_(req.token);
   const e = findEmployee_(req.id);
   if (!e) throw new Error('Employee not found.');
+  EMPLOYEES_MEMO = null;
   const sh = sheet_(SH.EMP);
   const col = headerMap_(sh);
   if (col.FaceData !== undefined) sh.getRange(e.row, col.FaceData + 1).setValue('');
@@ -831,7 +835,16 @@ function headerMap_(sh) {
   return m;
 }
 
+let EMPLOYEES_MEMO = null;
+
 function employees_() {
+  if (!EMPLOYEES_MEMO) EMPLOYEES_MEMO = readEmployees_();
+  // copies, so callers can delete fields without touching the memo
+  return EMPLOYEES_MEMO.map(function (e) { return Object.assign({}, e); });
+}
+
+function readEmployees_() {
+  EMPLOYEES_MEMO = null;
   const sh = sheet_(SH.EMP);
   const v = sh.getDataRange().getValues();
   const c = headerMap_(sh);
@@ -862,12 +875,41 @@ function findEmployee_(id) {
   return employees_().filter(function (e) { return e.id.toUpperCase() === id; })[0] || null;
 }
 
+/**
+ * Punches with WorkDate on or after `from`. Rows are added in time order, so this reads
+ * from the bottom of the sheet in growing chunks and stops once it is past `from`;
+ * the punch is fast no matter how many months of history the sheet holds.
+ */
+function punchesSince_(from, keep) {
+  const sh = sheet_(SH.PUNCH);
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const c = headerMap_(sh);
+  const width = sh.getLastColumn();
+  const stop = addDays_(from, -2); // margin for night shifts and late check-outs
+  let rows = [], end = last, chunk = 600;
+  while (end >= 2) {
+    const start = Math.max(2, end - chunk + 1);
+    const v = sh.getRange(start, 1, end - start + 1, width).getValues();
+    rows = v.concat(rows);
+    end = start - 1;
+    chunk *= 2;
+    let earliest = '';
+    for (let i = 0; i < v.length && !earliest; i++) earliest = dstr_(v[i][c.WorkDate]);
+    if (earliest && earliest < stop) break;
+  }
+  return rowsToPunches_(rows, c, function (q) { return q.date >= from && keep(q); });
+}
+
 function punches_(keep) {
   const sh = sheet_(SH.PUNCH);
   const last = sh.getLastRow();
   if (last < 2) return [];
   const c = headerMap_(sh);
-  const v = sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues();
+  return rowsToPunches_(sh.getRange(2, 1, last - 1, sh.getLastColumn()).getValues(), c, keep);
+}
+
+function rowsToPunches_(v, c, keep) {
   const g = function (r, k) { return c[k] === undefined ? '' : r[c[k]]; };
   const out = [];
   v.forEach(function (r) {

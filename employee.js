@@ -258,6 +258,7 @@ async function openCamera(type, targets) {
   S.method = methodFor(type);
   S.auto = false;
   S.autoPaused = false;
+  S.camOpenedAt = Date.now();
   S.facing = S.targets.length ? 'environment' : 'user';
   S.photo = S.thumb = null;
   $('#cam-title').textContent = LABELS[type] + (S.targets.length === 1 ? ' · ' + S.targets[0].name
@@ -860,6 +861,8 @@ $('#btn-submit').addEventListener('click', async function () {
 function maybeAutoPunch(found, green) {
   if (!S.auto || S.busy || S.autoPaused) return;
   if (!S.fix) { setAutoUI('Waiting for GPS...'); FL.okStreak = 0; return; }
+  // give the address lookup a moment, so the server doesn't have to do it while saving
+  if (!S.place && Date.now() - S.camOpenedAt < 3000) { setAutoUI('Getting location...'); return; }
   const ids = green.map(function (w) { return w.id; });
   const ready = S.targets.length
     ? S.targets.every(function (t) { return ids.indexOf(t.id) >= 0; })
