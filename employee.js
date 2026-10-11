@@ -485,9 +485,20 @@ function updateGeoUI() {
     }
     html = '<div class="row" style="justify-content:space-between"><b>±' + S.fix.acc + ' m GPS</b>' + fence + '</div>' +
       '<div style="margin-top:4px;opacity:.9">' + esc(p && p.address ? p.address : S.fix.lat.toFixed(5) + ', ' + S.fix.lng.toFixed(5)) + '</div>';
+    if (p && p.fenced && !p.inside) {
+      html += p.enforce
+        ? '<div class="geo-warn bad">You are outside the work area. Go inside ' + esc(p.place) + ' to punch.</div>'
+        : '<div class="geo-warn warn">Outside the work area: this punch will be marked as outside.</div>';
+    }
   }
   box.innerHTML = html;
-  $('#btn-shoot').disabled = !(S.fix && S.stream && $('#video').videoWidth);
+  $('#btn-shoot').disabled = !(S.fix && S.stream && $('#video').videoWidth) || outsideBlocked();
+}
+
+/** The admin blocks punches outside the work locations, and this person is outside. */
+function outsideBlocked() {
+  const p = S.place;
+  return !!(p && p.fenced && !p.inside && p.enforce);
 }
 
 $('#btn-shoot').addEventListener('click', capture);
@@ -932,6 +943,7 @@ function maybeAutoPunch(found, green) {
   if (!S.fix) { setAutoUI('Waiting for GPS...'); FL.okStreak = 0; return; }
   // give the address lookup a moment, so the server doesn't have to do it while saving
   if (!S.place && Date.now() - S.camOpenedAt < 3000) { setAutoUI('Getting location...'); return; }
+  if (outsideBlocked()) { setAutoUI('Outside work area - go inside to punch'); FL.okStreak = 0; return; }
   const ids = green.map(function (w) { return w.id; });
   const ready = S.targets.length
     ? S.targets.every(function (t) { return ids.indexOf(t.id) >= 0; })

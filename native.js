@@ -13,7 +13,7 @@
   const BG = plugin('BackgroundGeolocation');
   const ID = { LUNCH_OUT: 101, LUNCH_IN: 102, CHECK_OUT: 103, AWAY: 110 };
   const CHANNEL = 'attendance-alerts';
-  const W = { id: null, outSince: null, status: null, starting: false };
+  const W = { id: null, outSince: null, status: null, starting: false, error: '', notif: '' };
 
   let ready = null;
   function setup() {
@@ -108,10 +108,15 @@
           backgroundMessage: 'Checking the work area during lunch hour.',
           requestPermissions: true, stale: false, distanceFilter: 25,
         }, onLocation);
+        W.error = '';
       } catch (e) {
         console.error('watcher', e);
+        W.error = e && e.code === 'NOT_AUTHORIZED'
+          ? 'Location permission is off. Allow location for Attendance in phone Settings.'
+          : 'Range check could not start: ' + ((e && e.message) || e);
       } finally {
         W.starting = false;
+        render();
       }
     } else if (!need && W.id !== null) {
       stopWatch();
@@ -122,18 +127,60 @@
     if (W.id !== null && BG) BG.removeWatcher({ id: W.id }).catch(function () {});
     W.id = null;
     W.outSince = null;
+    render();
   }
+
+  function hm(t) { return new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }); }
+
+  /** A short line on the home screen so the person (and admin) can see the reminders are working. */
+  function render() {
+    const d = W.status, card = document.getElementById('native-card'), el = document.getElementById('native-status');
+    if (!card || !el || !d) return;
+    card.classList.remove('hidden');
+    const r = d.reminders;
+    const parts = [];
+    if (!r) {
+      parts.push('<b>Reminders off:</b> the server needs the latest update (ask the admin).');
+    } else {
+      const win = lunchWindow(d);
+      parts.push('<b>Reminders on</b>' + (win ? ' · lunch ' + hm(win.start) + '–' + hm(win.end) : r.autoLunch ? ' · automatic lunch' : ' · no lunch time set'));
+      let range;
+      if (!(r.fences || []).length) range = 'off: no work location set by the admin';
+      else if (store.get(awayKey(d))) range = 'away alert already sent today';
+      else if (W.id !== null) range = W.outSince ? 'active, you are outside the work area' : 'active';
+      else if (W.error) range = W.error;
+      else if ((d.next || []).indexOf('LUNCH_OUT') < 0) range = (d.next || []).indexOf('IN') >= 0 ? 'starts after Check In' : 'not needed now';
+      else if (win && Date.now() >= win.end) range = 'done for today';
+      else range = 'starting...';
+      parts.push('Lunch-hour range check: ' + range);
+    }
+    if (W.notif && W.notif !== 'granted') parts.push('<span style="color:var(--bad-ink)"><b>Notifications are blocked.</b> Allow them for Attendance in phone Settings.</span>');
+    el.innerHTML = parts.join('<br>');
+  }
+
+  document.addEventListener('click', async function (ev) {
+    if (!ev.target.closest('#native-test')) return;
+    await setup();
+    try {
+      await LN.schedule({ notifications: [{ id: 199, channelId: CHANNEL, title: 'Attendance test',
+        body: 'Notifications are working on this phone.', schedule: { at: new Date(Date.now() + 2000), allowWhileIdle: true } }] });
+      toast('Test notification in 2 seconds');
+    } catch (e) {
+      toast('Could not send a test notification: ' + ((e && e.message) || e), true);
+    }
+  });
 
   function onLocation(loc, err) {
     const d = W.status;
-    if (err || !loc || !d) return;
+    if (err) { W.error = err.code === 'NOT_AUTHORIZED' ? 'Location permission is off. Allow location for Attendance in phone Settings.' : String(err.message || err); render(); return; }
+    if (!loc || !d) return;
     if (!watchNeeded(d)) { stopWatch(); return; }
     const out = outsideBy(d, loc.latitude, loc.longitude);
     if (!out) return;
     const margin = Math.max(25, Math.min(loc.accuracy || 0, 100)); // don't count GPS wobble as leaving
     const now = Date.now();
-    if (out.over <= margin) { W.outSince = null; return; }
-    if (!W.outSince) W.outSince = now;
+    if (out.over <= margin) { if (W.outSince) { W.outSince = null; render(); } return; }
+    if (!W.outSince) { W.outSince = now; render(); }
     const win = lunchWindow(d);
     const awayMs = now - Math.max(W.outSince, win.start); // only time inside lunch hour counts
     if (now >= win.start && awayMs >= d.reminders.awayMinutes * 60000) alertAway(d, out, Math.round(awayMs / 60000), loc);
@@ -165,6 +212,8 @@
     onStatus: function (d) {
       if (!d || !d.profile) return;
       W.status = d;
+      render();
+      if (LN && LN.checkPermissions) LN.checkPermissions().then(function (p) { W.notif = p.display; render(); }).catch(function () {});
       scheduleReminders(d).catch(function (e) { console.error(e); });
       updateWatch(d).catch(function (e) { console.error(e); });
     },

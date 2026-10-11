@@ -10,7 +10,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance</title>
-<link rel="stylesheet" href="app.css?v=18">
+<link rel="stylesheet" href="app.css?v=19">
 </head>
 <body>
 
@@ -64,6 +64,12 @@
 
     <div id="notice"></div>
     <div class="notice warn hidden" id="upload-note"></div>
+    <div class="card hidden" id="native-card">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <div style="flex:1;min-width:0" class="small" id="native-status"></div>
+        <button class="btn sm ghost" id="native-test">Test notification</button>
+      </div>
+    </div>
     <div class="actions" id="actions"></div>
 
     <div class="card hidden" id="team-card">
@@ -139,9 +145,9 @@
 
 <canvas id="canvas" class="hidden"></canvas>
 
-<script src="config.js?v=18"></script>
-<script src="common.js?v=18"></script>
-<script src="employee.js?v=18"></script>
-<script src="native.js?v=18"></script>
+<script src="config.js?v=19"></script>
+<script src="common.js?v=19"></script>
+<script src="employee.js?v=19"></script>
+<script src="native.js?v=19"></script>
 </body>
 </html>

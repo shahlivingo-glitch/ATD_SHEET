@@ -1,4 +1,4 @@
-const VERSION = '2026-10-11.7';
+const VERSION = '2026-10-11.8';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts' };
 
@@ -334,7 +334,7 @@ function reminderInfo_(e) {
   const allowed = String(e.locations || '').toLowerCase().split(',').map(function (x) { return x.trim(); }).filter(String);
   if (allowed.length) locs = locs.filter(function (l) { return allowed.indexOf(l.name.toLowerCase()) >= 0; });
   return {
-    lunchStart: e.lunchStart || hhmm_(s.LUNCH_START) || '',
+    lunchStart: e.lunchStart || defaultLunchStart_(),
     lunchMinutes: num_(e.lunch, 0),
     awayMinutes: Math.max(1, num_(s.AWAY_MINUTES, 15)),
     shiftEnd: e.shiftEnd,
@@ -344,6 +344,12 @@ function reminderInfo_(e) {
 }
 
 /** The Android app reports someone outside the work location in lunch hour without Lunch Out. */
+/** Sheets made before this setting existed have no LUNCH_START row: use 1:00 PM until the admin sets one. */
+function defaultLunchStart_() {
+  const v = settings_().LUNCH_START;
+  return v === undefined ? '13:00' : (hhmm_(v) || '');
+}
+
 function reportAway_(req) {
   const e = authEmp_(req.token);
   const now = new Date();
@@ -814,6 +820,9 @@ function health_() {
     faceMode: faceMode_(),
     verifyInOut: verifyFor_('IN'),
     verifyLunch: verifyFor_('LUNCH_OUT'),
+    blockOutside: enforceFence_(),
+    locations: locations_().map(function (l) { return l.name + ' (' + l.radius + ' m)'; }),
+    lunchStart: defaultLunchStart_(),
   };
 }
 
@@ -1147,7 +1156,7 @@ function publicSettings_() {
   return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_(),
     lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE', faceMode: faceMode_(), faceThreshold: num_(s.FACE_THRESHOLD, 0.5),
     verifyInOut: verifyFor_('IN'), verifyLunch: verifyFor_('LUNCH_OUT'), faceStrict: faceStrict_(),
-    lunchStart: hhmm_(s.LUNCH_START) || '', awayMinutes: num_(s.AWAY_MINUTES, 15), minHalfDay: num_(s.MIN_HALF_DAY_HOURS, 3) };
+    lunchStart: defaultLunchStart_(), awayMinutes: num_(s.AWAY_MINUTES, 15), minHalfDay: num_(s.MIN_HALF_DAY_HOURS, 3) };
 }
 
 function enforceFence_() {
