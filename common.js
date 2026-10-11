@@ -221,6 +221,14 @@ async function faceDescriptors(img) {
   return found.map(function (f) { return Array.from(f.descriptor, function (v) { return Math.round(v * 1e4) / 1e4; }); });
 }
 
+/* ---------- Android app download link (only on Android phones using the website) ---------- */
+document.addEventListener('DOMContentLoaded', function () {
+  const native = window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform();
+  if (/Android/i.test(navigator.userAgent) && !native) {
+    document.querySelectorAll('.android-dl').forEach(function (a) { a.classList.remove('hidden'); });
+  }
+});
+
 /* ---------- install as an app (home-screen web app) ---------- */
 (function setupInstall() {
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(function () {});

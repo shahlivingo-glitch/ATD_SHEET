@@ -81,6 +81,7 @@ function applyStatus(r, t0) {
   // remembered so the next app start shows this screen instantly while it updates
   store.set('att_last', { data: r, offset: S.offset });
   renderHome();
+  if (window.NativeApp) NativeApp.onStatus(r);
   if (anyFaceUse()) loadFace().catch(function () {}); // download the face models early
 }
 
@@ -96,6 +97,7 @@ function logout(msg) {
   S.data = null;
   store.del('att_token');
   store.del('att_last');
+  if (window.NativeApp) NativeApp.onLogout();
   show('v-login');
   if (msg) toast(msg, true);
 }

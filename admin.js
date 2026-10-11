@@ -150,12 +150,16 @@ function renderDay() {
         '<b>' + (p ? fmtTime(p.ts) : '--') + flag + '</b>' + LABELS[type] + '</button>';
     };
     const meta = [];
+    if (x.short) meta.push('<span class="pill bad">Worked under ' + ((A.settings && A.settings.minHalfDay) || 3) + 'h</span>');
     if (x.late) meta.push('<span class="pill warn">Late ' + dur(x.late) + '</span>');
     if (x.early) meta.push('<span class="pill warn">Left ' + dur(x.early) + ' early</span>');
     if (x.autoLunch) meta.push('<span class="pill mute">Lunch ' + dur(x.breakMin) + ' auto</span>');
     if (x.lunchOver) meta.push('<span class="pill warn">Lunch +' + dur(x.lunchOver) + '</span>');
     if (x.ot) meta.push('<span class="pill info">OT ' + dur(x.ot) + '</span>');
     if (x.in) meta.push('<span class="pill mute">Worked ' + dur(x.workedMin) + '</span>');
+    (r.alerts || []).filter(function (a) { return a.empId === x.id; }).forEach(function (a) {
+      meta.push('<span class="pill bad" title="' + esc(a.detail) + '">' + esc(a.type) + ' · ' + fmtTime(a.ts) + '</span>');
+    });
     const badFace = ps.filter(function (p) { return /^NO MATCH|^No face|^Face check failed/.test(p.face || ''); }).length;
     if (badFace) meta.push('<span class="pill bad">Face mismatch ' + badFace + '</span>');
     if (ps.some(function (p) { return p.by; })) meta.push('<span class="pill info">Punched on shared phone</span>');
@@ -359,6 +363,7 @@ function openEmp(e) {
   $('#f-lunch').value = e.lunch;
   $('#f-grace').value = e.grace;
   $('#f-join').value = e.joinDate || '';
+  $('#f-lunchstart').value = e.lunchStart || '';
   const off = String(e.weeklyOff).toLowerCase();
   document.querySelectorAll('#f-off input').forEach(function (c) { c.checked = off.indexOf(c.value.toLowerCase()) >= 0; });
   $('#f-active').checked = e.active;
@@ -378,7 +383,7 @@ $('#emp-form').addEventListener('submit', async function (ev) {
     const r = await call('adminSaveEmployee', { employee: {
       isNew: !!this.dataset.isNew, id: $('#f-id').value.trim(), pin: $('#f-pin').value.trim(), name: $('#f-name').value.trim(),
       phone: $('#f-phone').value.trim(), dept: $('#f-dept').value.trim(), locations: $('#f-locs').value.trim(),
-      shiftStart: $('#f-start').value, shiftEnd: $('#f-end').value, lunch: $('#f-lunch').value, grace: $('#f-grace').value, joinDate: $('#f-join').value,
+      shiftStart: $('#f-start').value, shiftEnd: $('#f-end').value, lunch: $('#f-lunch').value, grace: $('#f-grace').value, joinDate: $('#f-join').value, lunchStart: $('#f-lunchstart').value,
       weeklyOff: Array.prototype.filter.call(document.querySelectorAll('#f-off input'), function (c) { return c.checked; })
         .map(function (c) { return c.value; }).join(', '),
       active: $('#f-active').checked, canPunchOthers: $('#f-others').checked,
@@ -456,6 +461,9 @@ async function loadSettingsForm() {
   $('#set-company').value = A.settings.company;
   $('#set-fence').checked = A.settings.enforceGeofence;
   $('#set-lunch').value = A.settings.lunchMode || 'SELFIE';
+  $('#set-lunchstart').value = A.settings.lunchStart || '';
+  $('#set-away').value = A.settings.awayMinutes || 15;
+  $('#set-halfday').value = A.settings.minHalfDay !== undefined ? A.settings.minHalfDay : 3;
   $('#set-v-inout').value = A.settings.verifyInOut || (A.settings.faceMode && A.settings.faceMode !== 'OFF' ? 'BOTH' : 'SELFIE');
   $('#set-v-lunch').value = A.settings.verifyLunch || $('#set-v-inout').value;
   $('#set-strict').value = (A.settings.faceStrict !== undefined ? A.settings.faceStrict : A.settings.faceMode === 'REQUIRED') ? '1' : '0';
@@ -466,7 +474,7 @@ $('#set-form').addEventListener('submit', async function (ev) {
   ev.preventDefault();
   try {
     const r = await call('adminSaveSettings', { settings: {
-      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, verifyInOut: $('#set-v-inout').value, verifyLunch: $('#set-v-lunch').value, faceStrict: $('#set-strict').value === '1', maxAccuracy: $('#set-acc').value,
+      company: $('#set-company').value, enforceGeofence: $('#set-fence').checked, lunchMode: $('#set-lunch').value, lunchStart: $('#set-lunchstart').value, awayMinutes: $('#set-away').value, minHalfDay: $('#set-halfday').value, verifyInOut: $('#set-v-inout').value, verifyLunch: $('#set-v-lunch').value, faceStrict: $('#set-strict').value === '1', maxAccuracy: $('#set-acc').value,
       newPassword: $('#set-pw').value,
     } });
     A.settings = r.settings;

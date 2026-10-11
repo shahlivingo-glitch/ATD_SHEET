@@ -11,7 +11,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance Admin</title>
-<link rel="stylesheet" href="app.css?v=16">
+<link rel="stylesheet" href="app.css?v=18">
 </head>
 <body>
 
@@ -142,6 +142,11 @@
         </select>
         <p class="muted small" style="margin:4px 0 0">Face recognition only always needs a match. Each employee's first selfie registers their face, or register it from Employees → Edit.</p>
       </div>
+      <div class="grid2">
+        <div><label for="set-lunchstart">Default lunch start (reminders)</label><input id="set-lunchstart" type="time"></div>
+        <div><label for="set-halfday">Half day needs at least (hours)</label><input id="set-halfday" type="number" min="0" max="12" step="0.5"></div>
+        <div><label for="set-away">Android app: alert when outside in lunch hour for (minutes)</label><input id="set-away" type="number" min="1" max="240"></div>
+      </div>
       <div><label for="set-lunch">Lunch break</label>
         <select id="set-lunch">
           <option value="SELFIE">Staff punch Lunch Out / Lunch In</option>
@@ -176,6 +181,7 @@
       <div><label for="f-lunch">Lunch allowed (minutes)</label><input id="f-lunch" type="number" min="0" max="300" value="45"></div>
       <div><label for="f-grace">Late grace (minutes)</label><input id="f-grace" type="number" min="0" max="180" value="10"></div>
       <div><label for="f-join">Joining date</label><input id="f-join" type="date"></div>
+      <div><label for="f-lunchstart">Lunch starts at (blank = company default)</label><input id="f-lunchstart" type="time"></div>
     </div>
     <div>
       <label>Weekly off</label>
@@ -218,8 +224,8 @@
   </div>
 </div>
 
-<script src="config.js?v=16"></script>
-<script src="common.js?v=16"></script>
-<script src="admin.js?v=16"></script>
+<script src="config.js?v=18"></script>
+<script src="common.js?v=18"></script>
+<script src="admin.js?v=18"></script>
 </body>
 </html>

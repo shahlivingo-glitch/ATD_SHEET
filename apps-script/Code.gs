@@ -1,14 +1,15 @@
-const VERSION = '2026-10-11.6';
+const VERSION = '2026-10-11.7';
 
-const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
+const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
-  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered'];
+  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered', 'LunchStart'];
 const PUNCH_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Action', 'Latitude', 'Longitude',
   'AccuracyM', 'Address', 'Location', 'InsideFence', 'DistanceM', 'PhotoURL', 'PhotoID',
   'ThumbID', 'DeviceTime', 'Device', 'PunchedBy', 'FaceMatch', 'PunchID'];
 const LOC_COLS = ['Name', 'Latitude', 'Longitude', 'RadiusM'];
 const HOL_COLS = ['Date', 'Name'];
+const ALERT_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Type', 'Detail', 'Latitude', 'Longitude'];
 
 const DEFAULT_SETTINGS = [
   ['COMPANY_NAME', 'My Company', 'Shown in the app and on every selfie stamp'],
@@ -20,6 +21,9 @@ const DEFAULT_SETTINGS = [
   ['VERIFY_LUNCH', 'SELFIE', 'Lunch Out / Lunch In: SELFIE, FACE or BOTH'],
   ['FACE_MODE', 'WARN', 'With BOTH: WARN = record a face mismatch only, REQUIRED = block the punch'],
   ['FACE_THRESHOLD', '0.5', 'Face match strictness: lower = stricter (0.4 strict, 0.5 normal, 0.6 loose)'],
+  ['LUNCH_START', '13:00', 'Default lunch start time for reminders (each employee can have their own)'],
+  ['AWAY_MINUTES', '15', 'Android app: alert when someone is outside the work location this many minutes in lunch hour without Lunch Out'],
+  ['MIN_HALF_DAY_HOURS', '3', 'Worked less than this (hours) = Absent; from this up to half the shift = Half Day'],
   ['LUNCH_MODE', 'SELFIE', 'SELFIE = staff take Lunch Out / Lunch In selfies. AUTO = no lunch selfie, lunch minutes are deducted automatically'],
 ];
 
@@ -34,6 +38,7 @@ function setup() {
   ensureSheet_(ss, SH.PUNCH, PUNCH_COLS, ['WorkDate', 'EmpID']);
   ensureSheet_(ss, SH.LOC, LOC_COLS, ['Name']);
   ensureSheet_(ss, SH.HOL, HOL_COLS, ['Date']);
+  ensureSheet_(ss, SH.ALERT, ALERT_COLS, ['WorkDate', 'EmpID']);
   ensureSheet_(ss, SH.SET, ['Key', 'Value', 'Notes'], ['Key', 'Value']);
 
   const have = settings_();
@@ -95,7 +100,7 @@ function onOpen() {
 
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
-  if (cache.get('schema') === '4') return;
+  if (cache.get('schema') === '5') return;
   const ss = SpreadsheetApp.getActive();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
@@ -108,7 +113,8 @@ function ensureSchema_() {
       }
     });
   });
-  cache.put('schema', '4', 21600);
+  cache.put('schema', '5', 21600);
+  if (!ss.getSheetByName(SH.ALERT)) ensureSheet_(ss, SH.ALERT, ALERT_COLS, ['WorkDate', 'EmpID']);
 }
 
 function ensureSheet_(ss, name, cols, textCols) {
@@ -142,6 +148,7 @@ const ROUTES = {
   attachPhoto: attachPhoto_,
   adminLogin: adminLogin_,
   adminDay: adminDay_,
+  reportAway: reportAway_,
   adminReport: adminReport_,
   adminEmployees: adminEmployees_,
   adminSaveEmployee: adminSaveEmployee_,
@@ -320,6 +327,54 @@ function punch_(req) {
   return res;
 }
 
+/** Lunch window and work locations, so the Android app can remind and check the range on the phone. */
+function reminderInfo_(e) {
+  const s = settings_();
+  let locs = locations_();
+  const allowed = String(e.locations || '').toLowerCase().split(',').map(function (x) { return x.trim(); }).filter(String);
+  if (allowed.length) locs = locs.filter(function (l) { return allowed.indexOf(l.name.toLowerCase()) >= 0; });
+  return {
+    lunchStart: e.lunchStart || hhmm_(s.LUNCH_START) || '',
+    lunchMinutes: num_(e.lunch, 0),
+    awayMinutes: Math.max(1, num_(s.AWAY_MINUTES, 15)),
+    shiftEnd: e.shiftEnd,
+    autoLunch: autoLunch_(),
+    fences: locs.map(function (l) { return { name: l.name, lat: l.lat, lng: l.lng, radius: l.radius }; }),
+  };
+}
+
+/** The Android app reports someone outside the work location in lunch hour without Lunch Out. */
+function reportAway_(req) {
+  const e = authEmp_(req.token);
+  const now = new Date();
+  const wd = workDate_(e, now);
+  const minutes = Math.max(0, Math.round(num_(req.minutes, 0)));
+  const dist = Math.round(num_(req.distance, 0));
+  const key = 'away:' + e.id + ':' + wd;
+  const cache = CacheService.getScriptCache();
+  if (cache.get(key)) return { duplicate: true };
+  cache.put(key, '1', 21600);
+  const detail = 'Outside ' + (req.place ? String(req.place).slice(0, 60) + ' ' : 'work location ') + 'for ' + minutes +
+    ' min in lunch hour without Lunch Out' + (dist ? ' (' + dist + ' m away)' : '');
+  sheet_(SH.ALERT).appendRow([now, txt_(wd), txt_(e.id), txt_(e.name), 'Away in lunch hour', txt_(detail),
+    num_(req.lat, ''), num_(req.lng, '')]);
+  return { logged: true };
+}
+
+function alertsFor_(date) {
+  const sh = SpreadsheetApp.getActive().getSheetByName(SH.ALERT);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const c = headerMap_(sh);
+  const last = sh.getLastRow();
+  const start = Math.max(2, last - 1999);
+  return sh.getRange(start, 1, last - start + 1, sh.getLastColumn()).getValues().filter(function (r) {
+    return dstr_(r[c.WorkDate]) === date;
+  }).map(function (r) {
+    const ts = r[c.Timestamp];
+    return { ts: ts instanceof Date ? ts.getTime() : 0, empId: String(r[c.EmpID]), type: String(r[c.Type]), detail: String(r[c.Detail]) };
+  });
+}
+
 /** The selfie of a punch, sent right after the punch itself so the person isn't kept waiting. */
 function attachPhoto_(req) {
   const me = authEmp_(req.token);
@@ -397,6 +452,7 @@ function statusFor_(e, given) {
     faceMode: faceMode_(),
     verify: { IN: verifyFor_('IN'), OUT: verifyFor_('OUT'), LUNCH_OUT: verifyFor_('LUNCH_OUT'), LUNCH_IN: verifyFor_('LUNCH_IN') },
     faceStrict: faceStrict_(),
+    reminders: reminderInfo_(e),
     workDate: st.workDate,
     punches: st.punches.map(publicPunch_),
     next: st.next,
@@ -453,7 +509,7 @@ function adminDay_(req) {
   const date = dateParam_(req.date) || fmt_(new Date(), 'yyyy-MM-dd');
   const rep = buildReport_(date, date, '');
   const punches = punchesSince_(date, function (p) { return p.date === date; }).map(publicPunch_);
-  return { date: date, rows: rep.days, punches: punches, settings: publicSettings_(), serverTime: Date.now() };
+  return { date: date, rows: rep.days, punches: punches, alerts: alertsFor_(date), settings: publicSettings_(), serverTime: Date.now() };
 }
 
 function adminReport_(req) {
@@ -505,6 +561,7 @@ function adminSaveEmployee_(req) {
     const vals = {
       EmpID: txt_(existing ? existing.id : id), Name: txt_(name), PIN: txt_(pin), Phone: txt_(String(x.phone || '').trim()),
       Department: txt_(String(x.dept || '').trim()), ShiftStart: txt_(ss), ShiftEnd: txt_(se), LunchMinutes: lunch,
+      LunchStart: txt_(hhmm_(x.lunchStart) || ''),
       GraceMinutes: grace, WeeklyOff: txt_(String(x.weeklyOff || '').trim()),
       AllowedLocations: txt_(String(x.locations || '').trim()), Active: x.active === false ? 'No' : 'Yes',
       CanPunchOthers: x.canPunchOthers ? 'Yes' : 'No',
@@ -568,6 +625,9 @@ function adminSaveSettings_(req) {
   const okV = function (v) { return /^(SELFIE|FACE|BOTH)$/.test(v) ? v : 'SELFIE'; };
   if (x.verifyInOut !== undefined) setSetting_('VERIFY_IN_OUT', okV(x.verifyInOut));
   if (x.verifyLunch !== undefined) setSetting_('VERIFY_LUNCH', okV(x.verifyLunch));
+  if (x.minHalfDay !== undefined) setSetting_('MIN_HALF_DAY_HOURS', String(Math.min(12, Math.max(0, num_(x.minHalfDay, 3)))));
+  if (x.lunchStart !== undefined) setSetting_('LUNCH_START', hhmm_(x.lunchStart) || '');
+  if (x.awayMinutes !== undefined) setSetting_('AWAY_MINUTES', String(Math.min(240, Math.max(1, Math.round(num_(x.awayMinutes, 15))))));
   if (x.faceStrict !== undefined) setSetting_('FACE_MODE', x.faceStrict ? 'REQUIRED' : 'WARN');
   if (x.lunchMode !== undefined) setSetting_('LUNCH_MODE', x.lunchMode === 'AUTO' ? 'AUTO' : 'SELFIE');
   if (x.maxAccuracy !== undefined) setSetting_('MAX_ACCURACY_M', String(Math.max(0, Math.round(num_(x.maxAccuracy, 0)))));
@@ -835,7 +895,7 @@ function summarize_(e, date, list, now, hol) {
   const breakMin = Math.round(breakMs / 60000);
   const ot = lastOut ? (off ? workedMin : Math.max(0, workedMin - expected)) : 0;
 
-  let status;
+  let status, short = false;
   if (!first) {
     if (off) status = holiday ? 'Holiday' : 'Weekly Off';
     else if (now < schedStart) status = 'Upcoming';
@@ -844,7 +904,10 @@ function summarize_(e, date, list, now, hol) {
   } else if (!lastOut) {
     status = current ? (onBreak ? 'On Lunch' : 'Working') : 'No Check-out';
   } else {
-    status = !off && workedMin < expected / 2 ? 'Half Day' : 'Present';
+    const minHalf = num_(settings_().MIN_HALF_DAY_HOURS, 3) * 60;
+    if (off || workedMin >= expected / 2) status = 'Present';
+    else if (workedMin >= minHalf) status = 'Half Day';
+    else { status = 'Absent'; short = true; } // checked in and out, but worked less than the half-day minimum
   }
 
   return {
@@ -855,7 +918,7 @@ function summarize_(e, date, list, now, hol) {
     lunchOut: lunchOut ? lunchOut.getTime() : null,
     lunchIn: lunchIn ? lunchIn.getTime() : null,
     workedMin: workedMin, expectedMin: expected, late: late, early: early,
-    breakMin: breakMin, lunchOver: Math.max(0, breakMin - num_(e.lunch, 0)), ot: ot, autoLunch: autoLunch,
+    breakMin: breakMin, lunchOver: Math.max(0, breakMin - num_(e.lunch, 0)), ot: ot, autoLunch: autoLunch, short: short,
   };
 }
 
@@ -943,6 +1006,7 @@ function readEmployees_() {
       canPunch: /^(yes|y|true|1)$/i.test(String(g(r, 'CanPunchOthers')).trim()),
       faceData: parseFace_(g(r, 'FaceData')),
       faceReg: String(g(r, 'FaceRegistered')).trim(),
+      lunchStart: hhmm_(g(r, 'LunchStart')),
     });
   }
   return out;
@@ -1082,7 +1146,8 @@ function publicSettings_() {
   const s = settings_();
   return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_(),
     lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE', faceMode: faceMode_(), faceThreshold: num_(s.FACE_THRESHOLD, 0.5),
-    verifyInOut: verifyFor_('IN'), verifyLunch: verifyFor_('LUNCH_OUT'), faceStrict: faceStrict_() };
+    verifyInOut: verifyFor_('IN'), verifyLunch: verifyFor_('LUNCH_OUT'), faceStrict: faceStrict_(),
+    lunchStart: hhmm_(s.LUNCH_START) || '', awayMinutes: num_(s.AWAY_MINUTES, 15), minHalfDay: num_(s.MIN_HALF_DAY_HOURS, 3) };
 }
 
 function enforceFence_() {
