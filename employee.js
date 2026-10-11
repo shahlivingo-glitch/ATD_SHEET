@@ -57,7 +57,7 @@ $('#login-form').addEventListener('submit', async function (ev) {
 async function refresh(quiet) {
   if (!S.token) return false;
   $('#btn-refresh').classList.add('spin');
-  const slow = quiet ? null : setTimeout(function () { toast('Server is slow, still updating...'); }, 9000);
+  const slow = quiet ? null : setTimeout(function () { toast('Ruko Zara Sabar Karo...'); }, 9000);
   try {
     const t0 = Date.now();
     const r = await api('status', { token: S.token, native: !!window.NativeApp });
