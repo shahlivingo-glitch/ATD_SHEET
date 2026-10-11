@@ -1,4 +1,4 @@
-const VERSION = '2026-10-11.5';
+const VERSION = '2026-10-11.6';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
 
@@ -6,7 +6,7 @@ const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', '
   'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered'];
 const PUNCH_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Action', 'Latitude', 'Longitude',
   'AccuracyM', 'Address', 'Location', 'InsideFence', 'DistanceM', 'PhotoURL', 'PhotoID',
-  'ThumbID', 'DeviceTime', 'Device', 'PunchedBy', 'FaceMatch'];
+  'ThumbID', 'DeviceTime', 'Device', 'PunchedBy', 'FaceMatch', 'PunchID'];
 const LOC_COLS = ['Name', 'Latitude', 'Longitude', 'RadiusM'];
 const HOL_COLS = ['Date', 'Name'];
 
@@ -64,7 +64,7 @@ function setup() {
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {   }
 }
 
-const DATA_CACHE = ['emp_v1', 'set_v1', 'hol_v1'];
+const DATA_CACHE = ['emp_v1', 'set_v1', 'hol_v1', 'loc_v1'];
 
 function cacheGet_(key) {
   try { const v = CacheService.getScriptCache().get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
@@ -95,7 +95,7 @@ function onOpen() {
 
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
-  if (cache.get('schema') === '3') return;
+  if (cache.get('schema') === '4') return;
   const ss = SpreadsheetApp.getActive();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
@@ -108,7 +108,7 @@ function ensureSchema_() {
       }
     });
   });
-  cache.put('schema', '3', 21600);
+  cache.put('schema', '4', 21600);
 }
 
 function ensureSheet_(ss, name, cols, textCols) {
@@ -139,6 +139,7 @@ const ROUTES = {
   status: status_,
   geocode: geocode_,
   punch: punch_,
+  attachPhoto: attachPhoto_,
   adminLogin: adminLogin_,
   adminDay: adminDay_,
   adminReport: adminReport_,
@@ -234,7 +235,8 @@ function punch_(req) {
 
   const method = verifyFor_(type);
   const m = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.photo || ''));
-  if (!m && method !== 'FACE') throw new Error('A selfie is required.');
+  const photoComing = !!m || !!req.photoPending;
+  if (!photoComing && method !== 'FACE') throw new Error('A selfie is required.');
   if (m && m[1].length > 8e6) throw new Error('Photo is too large.');
   const tm = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.thumb || ''));
 
@@ -257,13 +259,15 @@ function punch_(req) {
     }
   }
 
-  const face = checkFaces_(targets, cleanFaces_(req.faces), forOthers, req.faceError, method, !!m);
+  const face = checkFaces_(targets, cleanFaces_(req.faces), forOthers, req.faceError, method, photoComing);
 
+  const punchId = Utilities.getUuid();
+  let recent;
   const lock = LockService.getScriptLock();
   lock.waitLock(25000);
   try {
     const now = new Date();
-    const recent = recentPunches_(now);
+    recent = recentPunches_(now);
     const hol = holidays_();
     const states = targets.map(function (t) { return empState_(t, now, recent, hol); });
     const bad = targets.filter(function (t, i) { return states[i].next.indexOf(type) < 0; });
@@ -291,24 +295,93 @@ function punch_(req) {
       return [
         now, txt_(states[i].workDate), txt_(t.id), txt_(t.name), LABEL[type], lat, lng, acc, txt_(address),
         txt_(f.name), f.has ? (f.inside ? 'Yes' : 'No') : '', f.has ? f.distance : '',
-        file ? file.getUrl() : '', file ? file.getId() : '', thumbId, txt_(String(req.deviceTime || '').slice(0, 40)),
-        txt_(String(req.device || '').slice(0, 150)), txt_(by), face.results[i],
+        file ? file.getUrl() : (req.photoPending ? 'pending' : ''), file ? file.getId() : '', thumbId,
+        txt_(String(req.deviceTime || '').slice(0, 40)), txt_(String(req.device || '').slice(0, 150)), txt_(by),
+        face.results[i], punchId,
       ];
     });
     const sh = sheet_(SH.PUNCH);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
+    // the reply is built from memory: no second read of the sheet
+    targets.forEach(function (t, i) {
+      recent.push({ ts: now, date: states[i].workDate, empId: t.id, name: t.name, action: type, lat: lat, lng: lng, acc: acc,
+        address: address, location: fences[i].name || '', inside: fences[i].has ? (fences[i].inside ? 'Yes' : 'No') : '',
+        distance: fences[i].has ? fences[i].distance : '', photoId: file ? file.getId() : '', thumbId: thumbId, by: by,
+        face: face.results[i], photoUrl: file ? file.getUrl() : (req.photoPending ? 'pending' : '') });
+    });
     Object.keys(face.enroll).forEach(function (id) { saveFace_(id, face.enroll[id], 'first selfie'); });
+    if (face.enroll[me.id]) me.faceData = face.enroll[me.id];
   } finally {
     lock.releaseLock();
   }
-  const res = statusFor_(me);
+  const res = statusFor_(me, recent);
+  res.punchId = punchId;
   res.punchedFor = targets.map(function (t, i) { return { id: t.id, name: t.name, face: face.results[i] }; });
   return res;
 }
 
-function statusFor_(e) {
+/** The selfie of a punch, sent right after the punch itself so the person isn't kept waiting. */
+function attachPhoto_(req) {
+  const me = authEmp_(req.token);
+  const id = String(req.punchId || '');
+  if (!/^[\w-]{20,}$/.test(id)) throw new Error('Bad punch id');
+  const m = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.photo || ''));
+  if (!m) throw new Error('No photo');
+  if (m[1].length > 8e6) throw new Error('Photo is too large.');
+  const tm = /^data:image\/jpeg;base64,(.+)$/.exec(String(req.thumb || ''));
+  const sh = sheet_(SH.PUNCH);
+  const c = headerMap_(sh);
+  if (c.PunchID === undefined) throw new Error('Punch not found');
+  const width = sh.getLastColumn();
+  let found = [], end = sh.getLastRow(), chunk = 300;
+  while (end >= 2 && !found.length) {
+    const start = Math.max(2, end - chunk + 1);
+    sh.getRange(start, 1, end - start + 1, width).getValues().forEach(function (r, i) {
+      if (String(r[c.PunchID]) === id) found.push({ row: start + i, r: r });
+    });
+    end = start - 1;
+    chunk *= 2;
+  }
+  if (!found.length) throw new Error('Punch not found');
+  const mine = found.every(function (x) {
+    return String(x.r[c.EmpID]).toUpperCase() === me.id.toUpperCase() || String(x.r[c.PunchedBy]).indexOf(me.id + ' - ') === 0;
+  });
+  if (!mine) throw new Error('Not your punch');
+  if (String(found[0].r[c.PhotoID] || '')) return { photoId: String(found[0].r[c.PhotoID]) };
+
+  // one upload at a time per punch (a retry may arrive while the first is still saving)
+  const cache = CacheService.getScriptCache();
+  if (cache.get('attach:' + id)) return { busy: true };
+  cache.put('attach:' + id, '1', 120);
+  try {
+    return savePunchPhoto_(sh, c, found, m, tm);
+  } finally {
+    cache.remove('attach:' + id);
+  }
+}
+
+function savePunchPhoto_(sh, c, found, m, tm) {
+  const first = found[0].r;
+  const when = first[c.Timestamp] instanceof Date ? first[c.Timestamp] : new Date();
+  const base = (found.length > 1 ? 'GROUP' + found.length : String(first[c.EmpID])) + '_' + fmt_(when, 'yyyy-MM-dd_HHmmss') + '_' +
+    actionCode_(first[c.Action]);
+  const folder = monthFolder_(when);
+  const file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(m[1]), 'image/jpeg', base + '.jpg'));
+  file.setDescription(found.map(function (x) { return String(x.r[c.Name]); }).join(', ') + ' - ' + String(first[c.Action]) + ' - ' +
+    fmt_(when, 'dd MMM yyyy HH:mm:ss') + ' - ' + first[c.Latitude] + ',' + first[c.Longitude] +
+    (String(first[c.PunchedBy]) ? ' - taken by ' + String(first[c.PunchedBy]) : ''));
+  const thumbId = tm ? thumbFolder_(folder).createFile(Utilities.newBlob(Utilities.base64Decode(tm[1]), 'image/jpeg', base + '_t.jpg')).getId() : '';
+  found.forEach(function (x) {
+    sh.getRange(x.row, c.PhotoURL + 1).setValue(file.getUrl());
+    sh.getRange(x.row, c.PhotoID + 1).setValue(file.getId());
+    if (c.ThumbID !== undefined) sh.getRange(x.row, c.ThumbID + 1).setValue(thumbId);
+  });
+  return { photoId: file.getId() };
+}
+
+function statusFor_(e, given) {
   const now = new Date();
-  const recent = recentPunches_(now);
+  const recent = given || recentPunches_(now);
   const hol = holidays_();
   const st = empState_(e, now, recent, hol);
   const out = {
@@ -461,6 +534,7 @@ function adminSaveLocation_(req) {
   if (!name) throw new Error('Location name is required.');
   if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Invalid coordinates.');
   if (radius < 10 || radius > 50000) throw new Error('Radius must be between 10 and 50000 metres.');
+  try { CacheService.getScriptCache().remove('loc_v1'); } catch (e) { }
   const sh = sheet_(SH.LOC);
   const v = sh.getDataRange().getValues();
   for (let i = 1; i < v.length; i++) {
@@ -476,6 +550,7 @@ function adminSaveLocation_(req) {
 function adminDeleteLocation_(req) {
   authAdmin_(req.token);
   const name = String(req.name || '').trim().toLowerCase();
+  try { CacheService.getScriptCache().remove('loc_v1'); } catch (e) { }
   const sh = sheet_(SH.LOC);
   const v = sh.getDataRange().getValues();
   for (let i = v.length - 1; i >= 1; i--) {
@@ -919,6 +994,7 @@ function rowsToPunches_(v, c, keep) {
       acc: g(r, 'AccuracyM'), address: String(g(r, 'Address')), location: String(g(r, 'Location')),
       inside: String(g(r, 'InsideFence')), distance: g(r, 'DistanceM'), photoId: String(g(r, 'PhotoID')),
       thumbId: String(g(r, 'ThumbID')), by: String(g(r, 'PunchedBy')), face: String(g(r, 'FaceMatch')),
+      photoUrl: String(g(r, 'PhotoURL')),
     };
     if (keep(p)) out.push(p);
   });
@@ -931,6 +1007,7 @@ function publicPunch_(p) {
     ts: p.ts.getTime(), date: p.date, empId: p.empId, name: p.name, action: p.action, label: LABEL[p.action] || p.action,
     lat: p.lat, lng: p.lng, acc: p.acc, address: p.address, location: p.location, inside: p.inside,
     distance: p.distance, photoId: p.photoId, thumbId: p.thumbId, by: p.by, face: p.face,
+    photoPending: p.photoUrl === 'pending' && !p.photoId,
   };
 }
 
@@ -942,6 +1019,14 @@ function actionCode_(v) {
 }
 
 function locations_() {
+  const cached = cacheGet_('loc_v1');
+  if (cached) return cached;
+  const out = readLocations_();
+  cachePut_('loc_v1', out);
+  return out;
+}
+
+function readLocations_() {
   const v = sheet_(SH.LOC).getDataRange().getValues();
   const out = [];
   for (let i = 1; i < v.length; i++) {

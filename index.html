@@ -10,7 +10,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance</title>
-<link rel="stylesheet" href="app.css?v=15">
+<link rel="stylesheet" href="app.css?v=16">
 </head>
 <body>
 
@@ -62,6 +62,7 @@
     </div>
 
     <div id="notice"></div>
+    <div class="notice warn hidden" id="upload-note"></div>
     <div class="actions" id="actions"></div>
 
     <div class="card hidden" id="team-card">
@@ -128,6 +129,7 @@
       <div class="done-check hidden" id="done-check">✓</div>
       <div class="big" id="done-title"></div>
       <p class="muted" id="done-sub"></p>
+      <p class="muted small" id="done-photo" style="margin-top:-8px"></p>
       <button class="btn block" id="btn-done">Done</button>
     </div>
   </div>
@@ -135,8 +137,8 @@
 
 <canvas id="canvas" class="hidden"></canvas>
 
-<script src="config.js?v=15"></script>
-<script src="common.js?v=15"></script>
-<script src="employee.js?v=15"></script>
+<script src="config.js?v=16"></script>
+<script src="common.js?v=16"></script>
+<script src="employee.js?v=16"></script>
 </body>
 </html>

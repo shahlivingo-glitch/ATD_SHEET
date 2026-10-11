@@ -859,13 +859,24 @@ function roundRect(ctx, x, y, w, h, r) {
 async function sendPunch(photo, thumb, faces, faceError) {
   const p = S.place || {};
   const t0 = Date.now();
-  const r = await api('punch', {
+  const body = {
     token: S.token, type: S.type, lat: S.fix.lat, lng: S.fix.lng, acc: S.fix.acc,
-    address: p.address || '', photo: photo, thumb: thumb,
-    deviceTime: new Date().toISOString(), device: navigator.userAgent,
+    address: p.address || '', deviceTime: new Date().toISOString(), device: navigator.userAgent,
     forEmpIds: S.targets.map(function (t) { return t.id; }),
     faces: faces || [], faceError: !!faceError,
-  }, 90000);
+    photoPending: !!photo, // the photo follows in the background, so the punch is confirmed fast
+  };
+  let r;
+  try {
+    r = await api('punch', body, 60000);
+  } catch (e) {
+    if (!photo || !/selfie is required/i.test(e.message)) throw e;
+    // older backend: send the photo with the punch
+    r = await api('punch', Object.assign({}, body, { photoPending: false, photo: photo, thumb: thumb }), 90000);
+    photo = null;
+  }
+  if (photo && r.punchId) queuePhoto(r.punchId, photo, thumb);
+  $('#done-photo').textContent = photo && r.punchId ? 'Photo uploading...' : '';
   stopStream();
   if (S.watchId !== null) navigator.geolocation.clearWatch(S.watchId);
   S.watchId = null;
@@ -961,6 +972,59 @@ $('#auto-hint').addEventListener('click', function () {
 
 $('#btn-done').addEventListener('click', function () { show('v-home'); });
 
+/* ---------------- background photo upload ---------------- */
+// photos wait on the phone until the server has them, even if the app is closed or the signal drops
+
+let uploadQueue = store.get('att_uploads') || [];
+let uploading = false;
+
+function saveQueue() {
+  try { localStorage.setItem('att_uploads', JSON.stringify(uploadQueue)); }
+  catch (e) { /* phone storage full: keep the photo in memory for this session */ }
+  renderUploadNote();
+}
+
+function queuePhoto(punchId, photo, thumb) {
+  uploadQueue.push({ punchId: punchId, photo: photo, thumb: thumb, tries: 0 });
+  saveQueue();
+  processUploads();
+}
+
+async function processUploads() {
+  if (uploading || !uploadQueue.length || !S.token) return;
+  uploading = true;
+  try {
+    while (uploadQueue.length) {
+      const job = uploadQueue[0];
+      try {
+        const r = await api('attachPhoto', { token: S.token, punchId: job.punchId, photo: job.photo, thumb: job.thumb }, 120000);
+        if (r.busy) { await new Promise(function (res) { setTimeout(res, 5000); }); continue; }
+        uploadQueue.shift();
+        saveQueue();
+        if ($('#done-photo').textContent) $('#done-photo').textContent = 'Photo saved ✓';
+      } catch (e) {
+        if (e.auth) break;
+        job.tries++;
+        if (/not found|not your punch|bad punch/i.test(e.message) || job.tries > 30) { uploadQueue.shift(); saveQueue(); continue; }
+        saveQueue();
+        break; // try again later
+      }
+    }
+  } finally {
+    uploading = false;
+  }
+}
+
+function renderUploadNote() {
+  const el = $('#upload-note');
+  if (!el) return;
+  el.classList.toggle('hidden', !uploadQueue.length);
+  el.textContent = uploadQueue.length === 1 ? '1 photo waiting to upload' : uploadQueue.length + ' photos waiting to upload';
+}
+
+window.addEventListener('online', processUploads);
+setInterval(function () { if (uploadQueue.length && !document.hidden) processUploads(); }, 30000);
+
 /* ---------------- boot ---------------- */
 
 document.addEventListener('visibilitychange', function () {
@@ -985,7 +1049,8 @@ setInterval(function () { if (!document.hidden && !$('#v-home').classList.contai
     } else {
       $('#h-name').textContent = 'Loading...';
     }
-    refresh();
+    refresh().then(processUploads);
+    renderUploadNote();
   } else {
     show('v-login');
   }

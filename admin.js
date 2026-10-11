@@ -213,7 +213,9 @@ async function openPhoto(p) {
     ? (p.inside === 'No' ? '<span class="pill bad">Outside: ' + p.distance + ' m from ' + esc(p.location) + '</span>' : '<span class="pill ok">At ' + esc(p.location) + '</span>')
     : '';
   $('#ph-info').innerHTML =
-    (p.photoId ? '' : '<div><span class="pill info">Face recognition only, no photo saved</span></div>') +
+    (p.photoId ? '' : p.photoPending
+      ? '<div><span class="pill warn">Photo still uploading from the phone</span></div>'
+      : '<div><span class="pill info">Face recognition only, no photo saved</span></div>') +
     '<div><b>' + fmtDate(p.ts, true) + ', ' + fmtTime(p.ts, true) + '</b></div>' +
     '<div>' + esc(p.address || 'No address') + '</div>' +
     '<div class="muted small">' + p.lat + ', ' + p.lng + ' · ±' + esc(p.acc) + ' m GPS</div>' +
