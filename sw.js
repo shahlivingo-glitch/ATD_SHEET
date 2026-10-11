@@ -1,5 +1,5 @@
 // Network-first cache of the app shell so the home-screen app opens fast and updates on every deploy.
-const CACHE = 'attendance-v7';
+const CACHE = 'attendance-v8';
 const SHELL = ['./', './index.html', './admin.html', './app.css', './common.js', './employee.js', './admin.js', './config.js',
   './icon.svg', './icon-192.png', './tgra-mark.png', './manifest.json', './manifest-admin.json'];
 
@@ -16,9 +16,10 @@ self.addEventListener('activate', function (e) {
 self.addEventListener('fetch', function (e) {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return; // never touch API calls
-  e.respondWith(fetch(e.request).then(function (res) {
+  // always ask the server (cheap 304 when unchanged) so a new version never mixes with old files
+  e.respondWith(fetch(e.request.url, { cache: 'no-cache', credentials: 'same-origin' }).then(function (res) {
     const copy = res.clone();
     caches.open(CACHE).then(function (c) { c.put(e.request, copy); });
     return res;
-  }).catch(function () { return caches.match(e.request); }));
+  }).catch(function () { return caches.match(e.request, { ignoreSearch: true }); }));
 });
