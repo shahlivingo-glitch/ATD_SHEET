@@ -19,12 +19,22 @@ async function api(action, data, timeoutMs) {
       signal: ctrl ? ctrl.signal : undefined,
     });
   } catch (e) {
-    if (e && e.name === 'AbortError') throw new Error('The server is taking too long. Check the internet and try again.');
+    if (e && e.name === 'AbortError') {
+      const t = new Error('The server is taking too long. Check the internet and try again.');
+      t.retry = true;
+      throw t;
+    }
     throw new Error(navigator.onLine === false
       ? 'No internet connection. Please try again.'
       : 'Cannot reach the attendance server. Admin: check the Apps Script deployment (Who has access = Anyone) and the URL in config.js.');
   }
   if (timer) clearTimeout(timer);
+  if (res.status === 404 || res.status >= 500) {
+    // Google answers 404 for a short while right after a new version is deployed
+    const busy = new Error('The server is updating. Please wait a moment and try again.');
+    busy.retry = true;
+    throw busy;
+  }
   let j;
   let text = '';
   try { text = await res.text(); j = JSON.parse(text); } catch (e) {

@@ -54,18 +54,20 @@ $('#login-form').addEventListener('submit', async function (ev) {
 });
 
 /** Gets fresh data from the server. Resolves true when it worked. */
-async function refresh(quiet) {
+async function refresh(quiet, timeoutMs) {
   if (!S.token) return false;
+  S.lastRetry = false;
   $('#btn-refresh').classList.add('spin');
-  const slow = quiet ? null : setTimeout(function () { toast('Ruko Zara Sabar Karo...'); }, 9000);
+  const slow = quiet ? null : setTimeout(function () { toast('Server is slow, still updating...'); }, 9000);
   try {
     const t0 = Date.now();
-    const r = await api('status', { token: S.token, native: !!window.NativeApp });
+    const r = await api('status', { token: S.token, native: !!window.NativeApp }, timeoutMs);
     applyStatus(r, t0);
     return true;
   } catch (e) {
     if (e.auth) { logout(e.message); return false; }
     S.lastError = e.message;
+    S.lastRetry = !!e.retry;
     if (!quiet) toast(e.message, true);
     return false;
   } finally {
@@ -1007,8 +1009,16 @@ function hideLoader() {
 /** Opening the app: wait for fresh data before showing anything. */
 async function startupRefresh() {
   showLoader('Updating...');
-  const ok = await refresh(true);
-  if (!S.token) { hideLoader(); return; } // logged out
+  let ok = false;
+  // short tries with automatic retry: after a deploy Google can be slow or answer 404 for a minute
+  for (let attempt = 1; attempt <= 6 && !ok; attempt++) {
+    ok = await refresh(true, 20000);
+    if (!S.token) { hideLoader(); return; } // logged out
+    if (ok || !S.lastRetry) break;
+    clearTimeout(S.loaderSlow);
+    $('#loader-text').textContent = 'Server is updating, retrying (' + attempt + ' of 5)...';
+    if (attempt < 6) await new Promise(function (res) { setTimeout(res, 3000); });
+  }
   if (ok) { hideLoader(); processUploads(); return; }
   const last = store.get('att_last');
   if (last && last.data && last.data.profile) {
