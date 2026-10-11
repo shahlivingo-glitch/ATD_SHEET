@@ -271,3 +271,16 @@ tbody tr:hover { background: color-mix(in srgb, var(--brand) 6%, transparent); }
   .kpis { grid-template-columns: repeat(3, 1fr); }
   .kpi b { font-size: 22px; }
 }
+
+/* phone turned sideways: camera picture on the left, buttons in a column on the right */
+@media (orientation: landscape) and (max-height: 600px) {
+  .cam { flex-direction: row; }
+  .cam-bar { flex-direction: column; justify-content: center; width: 170px; flex: none; padding: 12px; padding-right: calc(12px + env(safe-area-inset-right)); padding-bottom: 12px; }
+  .shoot-bar { grid-template-columns: auto; grid-template-rows: 1fr auto 1fr; justify-items: center; }
+  .zoom-ctl { justify-self: center; align-self: start; grid-row: 1; }
+  .shutter { grid-row: 2; }
+  .auto-hint { grid-column: auto; grid-row: 2; min-width: 0; max-width: 150px; font-size: 13px; padding: 10px 12px; }
+  .cam-bar .btn { min-width: 0; width: 100%; }
+  .geo-box { right: auto; max-width: 60%; padding: 8px 10px; font-size: 12px; }
+  .face-status { top: calc(56px + env(safe-area-inset-top)); }
+}
