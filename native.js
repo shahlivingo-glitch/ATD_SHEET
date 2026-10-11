@@ -13,7 +13,7 @@
   const BG = plugin('BackgroundGeolocation');
   const ID = { LUNCH_OUT: 101, LUNCH_IN: 102, CHECK_OUT: 103, AWAY: 110 };
   const CHANNEL = 'attendance-alerts';
-  const W = { id: null, outSince: null, status: null, starting: false, error: '', notif: '' };
+  const W = { id: null, outSince: null, status: null, starting: false, error: '', notif: '', notes: {} };
 
   let ready = null;
   function setup() {
@@ -130,6 +130,16 @@
     render();
   }
 
+  /** A message the admin queued (for example the test notification): ring now. */
+  async function showNotice(note) {
+    W.notes[note.id] = true;
+    await setup();
+    try {
+      await LN.schedule({ notifications: [{ id: 2000 + Math.floor(Math.random() * 90000), channelId: CHANNEL,
+        title: note.title || 'Attendance', body: note.body || '', schedule: { at: new Date(Date.now() + 500), allowWhileIdle: true } }] });
+    } catch (e) { console.error('notice', e); }
+  }
+
   function hm(t) { return new Date(t).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit', hour12: true }); }
 
   /** A short line on the home screen so the person (and admin) can see the reminders are working. */
@@ -215,6 +225,7 @@
       render();
       if (LN && LN.checkPermissions) LN.checkPermissions().then(function (p) { W.notif = p.display; render(); }).catch(function () {});
       scheduleReminders(d).catch(function (e) { console.error(e); });
+      if (d.notice && !W.notes[d.notice.id]) showNotice(d.notice);
       updateWatch(d).catch(function (e) { console.error(e); });
     },
     onLogout: function () {

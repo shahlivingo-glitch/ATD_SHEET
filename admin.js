@@ -370,6 +370,8 @@ function openEmp(e) {
   $('#f-others').checked = !!e.canPunch;
   A.editing = isNew ? null : e.id;
   renderFaceRow();
+  $('#f-push-row').classList.toggle('hidden', isNew);
+  $('#f-push-status').innerHTML = '<span class="muted">Rings on their phone the next time the Android app is open.</span>';
   $('#emp-form').dataset.isNew = isNew ? '1' : '';
   $('#emp-modal').classList.remove('hidden');
   (isNew ? $('#f-id') : $('#f-name')).focus();
@@ -570,6 +572,23 @@ $('#f-face-reset').addEventListener('click', async function () {
     renderFaceRow();
     toast('Face reset');
   } catch (err) { toast(err.message, true); }
+});
+
+/* ---------------- push notifications ---------------- */
+
+$('#f-push-test').addEventListener('click', async function () {
+  const btn = this;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Sending';
+  try {
+    await call('adminTestPush', { id: A.editing });
+    toast('Test queued. It rings on their phone when the Android app is open (within about a minute) or next opened.');
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Send test notification';
+  }
 });
 
 /* ---------------- boot ---------------- */

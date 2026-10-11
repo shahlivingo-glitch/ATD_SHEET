@@ -1,4 +1,4 @@
-const VERSION = '2026-10-11.8';
+const VERSION = '2026-10-11.11';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts' };
 
@@ -100,7 +100,7 @@ function onOpen() {
 
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
-  if (cache.get('schema') === '5') return;
+  if (cache.get('schema') === '6') return;
   const ss = SpreadsheetApp.getActive();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
@@ -113,7 +113,7 @@ function ensureSchema_() {
       }
     });
   });
-  cache.put('schema', '5', 21600);
+  cache.put('schema', '6', 21600);
   if (!ss.getSheetByName(SH.ALERT)) ensureSheet_(ss, SH.ALERT, ALERT_COLS, ['WorkDate', 'EmpID']);
 }
 
@@ -149,6 +149,7 @@ const ROUTES = {
   adminLogin: adminLogin_,
   adminDay: adminDay_,
   reportAway: reportAway_,
+  adminTestPush: adminTestPush_,
   adminReport: adminReport_,
   adminEmployees: adminEmployees_,
   adminSaveEmployee: adminSaveEmployee_,
@@ -199,7 +200,10 @@ function login_(req) {
 }
 
 function status_(req) {
-  return statusFor_(authEmp_(req.token));
+  const e = authEmp_(req.token);
+  const out = statusFor_(e);
+  if (req.native) out.notice = takeNotice_(e);
+  return out;
 }
 
 function geocode_(req) {
@@ -379,6 +383,28 @@ function alertsFor_(date) {
     const ts = r[c.Timestamp];
     return { ts: ts instanceof Date ? ts.getTime() : 0, empId: String(r[c.EmpID]), type: String(r[c.Type]), detail: String(r[c.Detail]) };
   });
+}
+
+/* ---------- admin test notification ---------- */
+
+/** Queued for the employee; the Android app shows it with sound on its next refresh (app open or reopened). */
+function adminTestPush_(req) {
+  authAdmin_(req.token);
+  const e = findEmployee_(req.id);
+  if (!e) throw new Error('Employee not found.');
+  CacheService.getScriptCache().put('note:' + e.id.toUpperCase(), JSON.stringify({
+    id: Utilities.getUuid().slice(0, 8), title: 'Attendance test', body: 'Test from the admin: notifications are working on this phone.' }), 21600);
+  return { queued: true };
+}
+
+/** Hands a queued notice to the Android app once. */
+function takeNotice_(e) {
+  const cache = CacheService.getScriptCache();
+  const key = 'note:' + e.id.toUpperCase();
+  const v = cache.get(key);
+  if (!v) return null;
+  cache.remove(key);
+  try { return JSON.parse(v); } catch (err) { return null; }
 }
 
 /** The selfie of a punch, sent right after the punch itself so the person isn't kept waiting. */

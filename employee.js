@@ -53,17 +53,21 @@ $('#login-form').addEventListener('submit', async function (ev) {
   }
 });
 
+/** Gets fresh data from the server. Resolves true when it worked. */
 async function refresh(quiet) {
-  if (!S.token) return;
+  if (!S.token) return false;
   $('#btn-refresh').classList.add('spin');
   const slow = quiet ? null : setTimeout(function () { toast('Server is slow, still updating...'); }, 9000);
   try {
     const t0 = Date.now();
-    const r = await api('status', { token: S.token });
+    const r = await api('status', { token: S.token, native: !!window.NativeApp });
     applyStatus(r, t0);
+    return true;
   } catch (e) {
-    if (e.auth) return logout(e.message);
+    if (e.auth) { logout(e.message); return false; }
+    S.lastError = e.message;
     if (!quiet) toast(e.message, true);
+    return false;
   } finally {
     clearTimeout(slow);
     $('#btn-refresh').classList.remove('spin');
@@ -915,6 +919,7 @@ async function sendPunch(photo, thumb, faces, faceError) {
       (f ? ' Face: ' + faceText(f) + '.' : '');
   }
   S.targets = [];
+  S.afterPunch = refresh(true);
   show('v-done');
 }
 
@@ -984,7 +989,54 @@ $('#auto-hint').addEventListener('click', function () {
   setAutoUI('Look at the camera');
 });
 
-$('#btn-done').addEventListener('click', function () { show('v-home'); });
+/* ---------------- full-screen wheel while the app gets fresh data ---------------- */
+
+function showLoader(text) {
+  $('#loader-text').textContent = text || 'Updating...';
+  $('#loader-retry').classList.add('hidden');
+  $('#loader').classList.remove('hidden');
+  clearTimeout(S.loaderSlow);
+  S.loaderSlow = setTimeout(function () { $('#loader-text').textContent = 'Server is slow, still updating...'; }, 8000);
+}
+
+function hideLoader() {
+  clearTimeout(S.loaderSlow);
+  $('#loader').classList.add('hidden');
+}
+
+/** Opening the app: wait for fresh data before showing anything. */
+async function startupRefresh() {
+  showLoader('Updating...');
+  const ok = await refresh(true);
+  if (!S.token) { hideLoader(); return; } // logged out
+  if (ok) { hideLoader(); processUploads(); return; }
+  const last = store.get('att_last');
+  if (last && last.data && last.data.profile) {
+    // no internet / server down: show the last saved screen, clearly marked
+    S.offset = last.offset || 0;
+    S.data = last.data;
+    setTZ(last.data.tz);
+    renderHome();
+    hideLoader();
+    toast('Could not update (' + (S.lastError || 'no connection') + '). Showing the last saved screen.', true);
+    return;
+  }
+  $('#loader-text').textContent = 'Could not load: ' + (S.lastError || 'no connection');
+  $('#loader-retry').classList.remove('hidden');
+  clearTimeout(S.loaderSlow);
+}
+$('#loader-retry').addEventListener('click', startupRefresh);
+
+// after every punch the app refreshes from the server before going back home
+$('#btn-done').addEventListener('click', async function () {
+  if (S.afterPunch) {
+    showLoader('Updating...');
+    await S.afterPunch;
+    S.afterPunch = null;
+    hideLoader();
+  }
+  show('v-home');
+});
 
 /* ---------------- background photo upload ---------------- */
 // photos wait on the phone until the server has them, even if the app is closed or the signal drops
@@ -1052,18 +1104,8 @@ setInterval(function () { if (!document.hidden && !$('#v-home').classList.contai
   tick();
   if (S.token) {
     show('v-home');
-    const last = store.get('att_last');
-    if (last && last.data && last.data.profile) {
-      // show the last known screen straight away; the server reply replaces it
-      S.offset = last.offset || 0;
-      S.data = last.data;
-      setTZ(last.data.tz);
-      renderHome();
-      tick();
-    } else {
-      $('#h-name').textContent = 'Loading...';
-    }
-    refresh().then(processUploads);
+    $('#h-name').textContent = 'Loading...';
+    startupRefresh();
     renderUploadNote();
   } else {
     show('v-login');
