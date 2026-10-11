@@ -525,7 +525,12 @@ async function faceTick() {
         .withFaceDescriptors();
       if (FL.on) drawFaceBoxes(found);
     } catch (e) {
-      if (FL.on) $('#face-status').textContent = 'Face check unavailable';
+      if (!FL.cpu) {
+        FL.cpu = true; // some graphics chips fail in the GPU mode; switch to the CPU mode once
+        try { await faceapi.tf.setBackend('cpu'); await faceapi.tf.ready(); } catch (e2) { /* keep trying */ }
+      } else if (FL.on) {
+        $('#face-status').textContent = 'Face check unavailable';
+      }
     } finally {
       FL.busy = false;
     }

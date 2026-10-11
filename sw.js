@@ -1,5 +1,5 @@
 // Network-first cache of the app shell so the home-screen app opens fast and updates on every deploy.
-const CACHE = 'attendance-v9';
+const CACHE = 'attendance-v10';
 const SHELL = ['./', './index.html', './admin.html', './app.css', './common.js', './employee.js', './admin.js', './config.js',
   './icon.svg', './icon-192.png', './tgra-mark.png', './manifest.json', './manifest-admin.json'];
 

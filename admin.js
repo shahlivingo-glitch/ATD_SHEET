@@ -311,7 +311,7 @@ async function loadEmployees() {
 
 function renderEmployees() {
   const q = $('#emp-search').value.trim().toLowerCase();
-  const list = A.employees.filter(function (e) { return !q || (e.id + ' ' + e.name + ' ' + e.dept).toLowerCase().indexOf(q) >= 0; });
+  const list = (A.employees || []).filter(function (e) { return !q || (e.id + ' ' + e.name + ' ' + e.dept).toLowerCase().indexOf(q) >= 0; });
   $('#emp-rows').innerHTML = list.length ? list.map(function (e) {
     return '<tr><td>' + esc(e.id) + '</td><td>' + esc(e.name) +
       (e.canPunch ? ' <span class="pill info" title="Can take selfies for other employees">Shared phone</span>' : '') +
@@ -479,7 +479,7 @@ $('#set-form').addEventListener('submit', async function (ev) {
 
 function renderFaceRow() {
   const row = $('#f-face-row');
-  const e = A.editing && A.employees.find(function (x) { return x.id === A.editing; });
+  const e = A.editing && (A.employees || []).find(function (x) { return x.id === A.editing; });
   row.classList.toggle('hidden', !e);
   if (!e) return;
   $('#f-face-status').innerHTML = e.hasFace
@@ -531,8 +531,14 @@ $('#fr-shoot').addEventListener('click', async function () {
     c.getContext('2d').drawImage(v, 0, 0);
     const faces = await faceDescriptors(c);
     if (faces.length !== 1) throw new Error(faces.length ? 'More than one face found. Only the employee should be in the frame.' : 'No face found. Face the camera in good light.');
-    const r = await call('adminSaveFace', { id: A.editing, descriptor: faces[0] });
-    A.employees = r.employees;
+    let r;
+    try {
+      r = await call('adminSaveFace', { id: A.editing, descriptor: faces[0] });
+    } catch (e) {
+      throw new Error('Face read OK, but saving failed: ' + e.message);
+    }
+    if (Array.isArray(r.employees)) A.employees = r.employees;
+    else await loadEmployees();
     renderEmployees();
     renderFaceRow();
     frClose();
@@ -548,7 +554,8 @@ $('#f-face-reset').addEventListener('click', async function () {
   if (!confirm('Reset this face? The next selfie will register a new one.')) return;
   try {
     const r = await call('adminResetFace', { id: A.editing });
-    A.employees = r.employees;
+    if (Array.isArray(r.employees)) A.employees = r.employees;
+    else await loadEmployees();
     renderEmployees();
     renderFaceRow();
     toast('Face reset');

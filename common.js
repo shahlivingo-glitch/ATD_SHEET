@@ -132,10 +132,32 @@ function loadFace() {
 /** Returns one 128-number descriptor per face found, biggest face first. */
 async function faceDescriptors(img) {
   await loadFace();
-  const found = await faceapi
-    .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.45 }))
-    .withFaceLandmarks(true)
-    .withFaceDescriptors();
+  const run = function () {
+    const task = faceapi
+      .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.45 }))
+      .withFaceLandmarks(true)
+      .withFaceDescriptors();
+    // never leave the person waiting on a stuck face check
+    return Promise.race([Promise.resolve(task), new Promise(function (resolve, reject) {
+      setTimeout(function () { reject(new Error('Face check took too long')); }, 40000);
+    })]);
+  };
+  let found;
+  try {
+    found = await run();
+  } catch (e) {
+    // some graphics chips fail in the GPU mode; the CPU mode is slower but works everywhere
+    console.error('face check failed, retrying on CPU', e);
+    try {
+      await faceapi.tf.setBackend('cpu');
+      await faceapi.tf.ready();
+      found = await run();
+    } catch (e2) {
+      console.error(e2);
+      throw new Error('Could not read the face on this device (' + (e2 && e2.message || e2) + ').');
+    }
+  }
+  found = Array.isArray(found) ? found : [];
   found.sort(function (a, b) { return b.detection.box.area - a.detection.box.area; });
   return found.map(function (f) { return Array.from(f.descriptor, function (v) { return Math.round(v * 1e4) / 1e4; }); });
 }
