@@ -158,13 +158,27 @@ function renderHome() {
 
 /* ---------------- other employees (shared phone / group selfie) ---------------- */
 
+/** The person holding the phone, so they can be in their own group selfie. */
+function selfEntry() {
+  const d = S.data, p = d.profile, last = d.punches[d.punches.length - 1];
+  return { id: p.id, name: p.name, dept: p.dept, next: d.next, status: d.summary.status, me: true,
+    last: last ? { label: last.label, ts: last.ts } : null };
+}
+
+/** Group mode lists "me" first, then everyone else. */
+function teamPool() {
+  const d = S.data;
+  return S.group ? [selfEntry()].concat(d.team || []) : (d.team || []);
+}
+
 function renderTeam() {
   const d = S.data;
   const card = $('#team-card');
   if (!d.team) { card.classList.add('hidden'); return; }
   card.classList.remove('hidden');
+  const pool = teamPool();
   Object.keys(S.sel).forEach(function (id) {
-    const t = d.team.find(function (x) { return x.id === id; });
+    const t = pool.find(function (x) { return x.id === id; });
     if (!t || !t.next.length) delete S.sel[id];
   });
   $('#btn-group').textContent = S.group ? 'Cancel group' : 'Group selfie';
@@ -173,14 +187,14 @@ function renderTeam() {
     : "Take the selfie for staff who don't have a phone.";
 
   const q = $('#team-search').value.trim().toLowerCase();
-  const list = d.team.filter(function (t) { return !q || (t.name + ' ' + t.id + ' ' + t.dept).toLowerCase().indexOf(q) >= 0; });
+  const list = pool.filter(function (t) { return !q || (t.name + ' ' + t.id + ' ' + t.dept).toLowerCase().indexOf(q) >= 0; });
   $('#team-list').innerHTML = list.length ? list.map(function (t) {
     const last = t.last ? t.last.label + ' ' + fmtTime(t.last.ts) : 'No punch yet';
     let right;
     if (S.group) {
       right = t.next.length ? '<input type="checkbox"' + (S.sel[t.id] ? ' checked' : '') + '>' : '<span class="muted small">Done</span>';
       return '<li class="' + (t.next.length ? 'pickable' : '') + (S.sel[t.id] ? ' picked' : '') + '" data-pick="' + esc(t.id) + '">' +
-        right + '<div class="who"><b>' + esc(t.name) + '</b><span class="muted small">' + esc(t.id) + ' · ' + esc(last) + '</span></div>' +
+        right + '<div class="who"><b>' + esc(t.name) + (t.me ? ' <span class="pill info">me</span>' : '') + '</b><span class="muted small">' + esc(t.id) + ' · ' + esc(last) + '</span></div>' +
         statusPill(t.status) + '</li>';
     }
     right = t.next.length
@@ -193,7 +207,7 @@ function renderTeam() {
 }
 
 function selectedTeam() {
-  return (S.data.team || []).filter(function (t) { return S.sel[t.id]; });
+  return teamPool().filter(function (t) { return S.sel[t.id]; });
 }
 
 function renderGroupBar() {
@@ -280,7 +294,8 @@ async function openCamera(type, targets) {
   S.offerSelfie = false;
   S.faceFallback = false;
   S.camOpenedAt = Date.now();
-  S.facing = S.targets.length ? 'environment' : 'user';
+  // back camera for photos of others; front camera when the phone holder is in the photo too
+  S.facing = S.targets.length && !S.targets.some(function (t) { return t.me; }) ? 'environment' : 'user';
   S.photo = S.thumb = null;
   $('#cam-title').textContent = LABELS[type] + (S.targets.length === 1 ? ' · ' + S.targets[0].name
     : S.targets.length > 1 ? ' · ' + S.targets.length + ' people' : '');
