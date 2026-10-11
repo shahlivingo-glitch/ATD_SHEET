@@ -251,6 +251,7 @@ async function openCamera(type, targets) {
   $('#bar-confirm').classList.add('hidden');
   show('v-camera');
   startGeo();
+  if (faceOn()) loadFaceRefs(); // fresh each time: a first selfie may have just registered someone
   try {
     await startStream();
   } catch (e) {
@@ -272,9 +273,11 @@ async function startStream() {
   v.srcObject = S.stream;
   await v.play().catch(function () {});
   updateGeoUI();
+  startFaceLoop();
 }
 
 function stopStream() {
+  stopFaceLoop();
   if (S.stream) S.stream.getTracks().forEach(function (t) { t.stop(); });
   S.stream = null;
   $('#video').srcObject = null;
@@ -379,6 +382,135 @@ $('#btn-retake').addEventListener('click', async function () {
 
 function faceOn() { return S.data && S.data.faceMode && S.data.faceMode !== 'OFF'; }
 
+/* ---------------- live face boxes on the camera ---------------- */
+// green = recognised and expected, amber = recognised but not selected, red = not registered / not the right person
+
+const FL = { on: false, busy: false, timer: null, refs: {}, thr: 0.5, last: [] };
+
+async function loadFaceRefs() {
+  try {
+    const r = await api('faceRefs', { token: S.token });
+    FL.refs = r.refs || {};
+    FL.thr = r.threshold || 0.5;
+  } catch (e) { /* boxes still show, just without names */ }
+}
+
+function startFaceLoop() {
+  if (!faceOn() || FL.on) return;
+  FL.on = true;
+  $('#face-status').classList.remove('hidden');
+  $('#face-status').textContent = 'Starting face check...';
+  faceTick();
+}
+
+function stopFaceLoop() {
+  FL.on = false;
+  clearTimeout(FL.timer);
+  const c = $('#face-overlay');
+  c.getContext('2d').clearRect(0, 0, c.width, c.height);
+  $('#face-status').classList.add('hidden');
+  FL.last = [];
+}
+
+async function faceTick() {
+  if (!FL.on) return;
+  const v = $('#video');
+  if (v.videoWidth && !FL.busy) {
+    FL.busy = true;
+    try {
+      await loadFace();
+      const found = await faceapi
+        .detectAllFaces(v, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 }))
+        .withFaceLandmarks(true)
+        .withFaceDescriptors();
+      if (FL.on) drawFaceBoxes(found);
+    } catch (e) {
+      if (FL.on) $('#face-status').textContent = 'Face check unavailable';
+    } finally {
+      FL.busy = false;
+    }
+  }
+  if (FL.on) FL.timer = setTimeout(faceTick, 250);
+}
+
+function faceDistance(a, b) {
+  let s = 0;
+  for (let i = 0; i < 128; i++) { const d = a[i] - b[i]; s += d * d; }
+  return Math.sqrt(s);
+}
+
+/** Who is this face, and is it someone this punch is for? */
+function classifyFace(desc) {
+  let bestId = null, best = 99;
+  Object.keys(FL.refs).forEach(function (id) {
+    const d = faceDistance(desc, FL.refs[id].d);
+    if (d < best) { best = d; bestId = id; }
+  });
+  const me = S.data.profile;
+  const expected = S.targets.length ? S.targets.map(function (t) { return t.id; }) : [me.id];
+  if (bestId && best <= FL.thr) {
+    const name = FL.refs[bestId].name;
+    if (expected.indexOf(bestId) >= 0) return { color: '#22c55e', label: name, ok: true, id: bestId };
+    if (!S.targets.length) return { color: '#ef4444', label: 'Not you (' + name + ')' };
+    return { color: '#f59e0b', label: name + ' (not selected)' };
+  }
+  if (!S.targets.length && !FL.refs[me.id]) return { color: '#ef4444', label: 'Not registered yet' };
+  return { color: '#ef4444', label: 'Not registered' };
+}
+
+function drawFaceBoxes(found) {
+  const v = $('#video'), c = $('#face-overlay');
+  const cw = v.clientWidth, ch = v.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(cw * dpr) || c.height !== Math.round(ch * dpr)) {
+    c.width = Math.round(cw * dpr);
+    c.height = Math.round(ch * dpr);
+  }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, cw, ch);
+  // the video uses object-fit: cover, and the front camera is shown mirrored
+  const k = Math.max(cw / v.videoWidth, ch / v.videoHeight);
+  const ox = (cw - v.videoWidth * k) / 2, oy = (ch - v.videoHeight * k) / 2;
+  const mirror = S.facing === 'user';
+  FL.last = found.map(function (f) {
+    const b = f.detection.box;
+    const who = classifyFace(f.descriptor);
+    let x = ox + b.x * k;
+    const y = oy + b.y * k, w = b.width * k, h = b.height * k;
+    if (mirror) x = cw - x - w;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = who.color;
+    roundRect(ctx, x, y, w, h, 10);
+    ctx.stroke();
+    ctx.font = '600 14px system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
+    const tw = ctx.measureText(who.label).width + 14;
+    const ly = Math.max(4, y > 26 ? y - 26 : y + h + 4);
+    const lx = Math.max(4, Math.min(x, cw - tw - 4)); // keep the name on screen
+    ctx.fillStyle = who.color;
+    roundRect(ctx, lx, ly, tw, 22, 6);
+    ctx.fill();
+    ctx.fillStyle = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(who.label, lx + 7, ly + 11);
+    return who;
+  });
+
+  const st = $('#face-status');
+  const green = FL.last.filter(function (w) { return w.ok; });
+  if (!found.length) {
+    st.textContent = 'No face - look at the camera';
+    st.style.background = 'rgba(239,68,68,.85)';
+  } else if (S.targets.length) {
+    const ids = green.map(function (w) { return w.id; });
+    const got = S.targets.filter(function (t) { return ids.indexOf(t.id) >= 0; }).length;
+    st.textContent = got + ' of ' + S.targets.length + ' selected recognised';
+    st.style.background = got === S.targets.length ? 'rgba(34,197,94,.85)' : 'rgba(239,68,68,.85)';
+  } else {
+    st.textContent = green.length ? 'Face recognised ✓' : FL.last[0].label;
+    st.style.background = green.length ? 'rgba(34,197,94,.85)' : 'rgba(239,68,68,.85)';
+  }
+}
+
 async function capture() {
   const v = $('#video');
   if (!v.videoWidth || !S.fix) { toast('Camera is still starting, try again', true); return; }
@@ -395,6 +527,7 @@ async function capture() {
   S.faces = [];
   S.faceError = false;
   if (faceOn()) {
+    stopFaceLoop(); // one face job at a time
     const shoot = $('#btn-shoot');
     shoot.disabled = true;
     $('#cam-title').dataset.title = $('#cam-title').dataset.title || $('#cam-title').textContent;
@@ -413,9 +546,10 @@ async function capture() {
       toast(S.faces.length
         ? 'Only ' + S.faces.length + ' of ' + need + ' faces found. Everyone must face the camera.'
         : 'No face found. Look straight at the camera in good light.', true);
+      startFaceLoop();
       return; // camera stays live for another try
     }
-    if (S.data.faceMode === 'REQUIRED' && S.faceError) return;
+    if (S.data.faceMode === 'REQUIRED' && S.faceError) { startFaceLoop(); return; }
   }
 
   const c = $('#canvas');

@@ -137,6 +137,7 @@ const ROUTES = {
   adminSaveSettings: adminSaveSettings_,
   adminThumbs: adminThumbs_,
   adminPhoto: adminPhoto_,
+  faceRefs: faceRefs_,
   adminSaveFace: adminSaveFace_,
   adminResetFace: adminResetFace_,
 };
@@ -631,6 +632,21 @@ function saveFace_(id, desc, how) {
   if (!e || col.FaceData === undefined) return;
   sh.getRange(e.row, col.FaceData + 1).setValue(JSON.stringify(desc.map(function (v) { return Math.round(v * 1e4) / 1e4; })));
   if (col.FaceRegistered !== undefined) sh.getRange(e.row, col.FaceRegistered + 1).setValue(txt_(fmt_(new Date(), 'yyyy-MM-dd HH:mm') + ' (' + how + ')'));
+}
+
+/**
+ * Registered faces the phone needs to colour the live camera boxes: only your own face,
+ * or the whole team on a shared phone. Every punch is still checked here on the server.
+ */
+function faceRefs_(req) {
+  const me = authEmp_(req.token);
+  const refs = {};
+  if (faceMode_() !== 'OFF') {
+    (me.canPunch ? employees_().filter(function (e) { return e.active; }) : [me]).forEach(function (e) {
+      if (e.faceData) refs[e.id] = { name: e.name, d: e.faceData };
+    });
+  }
+  return { refs: refs, threshold: num_(settings_().FACE_THRESHOLD, 0.5), mode: faceMode_() };
 }
 
 function adminSaveFace_(req) {
