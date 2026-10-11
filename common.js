@@ -106,7 +106,24 @@ const LABELS = { IN: 'Check In', LUNCH_OUT: 'Lunch Out', LUNCH_IN: 'Lunch In', O
 
 /* ---------- face recognition (runs on the phone; only numbers are sent) ---------- */
 const FACE_CDN = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.15';
+const TF_WASM = 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs-backend-wasm@4.22.0/dist/';
+const FACE_BACKENDS = ['webgl', 'wasm', 'cpu'];
 let faceLoading = null;
+let faceReady = false;
+let faceQueue = Promise.resolve();
+
+function withTimeout(promise, ms, msg) {
+  return Promise.race([Promise.resolve(promise), new Promise(function (resolve, reject) {
+    setTimeout(function () { reject(new Error(msg || 'Face check took too long')); }, ms);
+  })]);
+}
+
+/** Face jobs run one at a time; a stuck job is dropped after its time limit so the next one can start. */
+function faceJob(fn, ms) {
+  const run = faceQueue.then(function () { return withTimeout(fn(), ms); });
+  faceQueue = run.then(function () {}, function () {});
+  return run;
+}
 
 function loadFace() {
   if (faceLoading) return faceLoading;
@@ -124,34 +141,71 @@ function loadFace() {
       faceapi.nets.faceLandmark68TinyNet.loadFromUri(m),
       faceapi.nets.faceRecognitionNet.loadFromUri(m),
     ]);
-  });
+  }).then(function () {
+    return pickFaceBackend(store.get('att_face_backend'));
+  }).then(function () { faceReady = true; });
   faceLoading.catch(function () { faceLoading = null; });
   return faceLoading;
+}
+
+/** Runs every face model once on a blank picture: proves this mode works here and makes the first real check fast. */
+async function faceWarmUp() {
+  const c = document.createElement('canvas');
+  c.width = 160;
+  c.height = 160;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = '#8a8a8a';
+  ctx.fillRect(0, 0, 160, 160);
+  await faceapi.detectAllFaces(c, new faceapi.TinyFaceDetectorOptions({ inputSize: 160 }));
+  await faceapi.nets.faceLandmark68TinyNet.detectLandmarks(c);
+  await faceapi.nets.faceRecognitionNet.computeFaceDescriptor(c);
+}
+
+/** Phones differ: try the graphics chip, then WebAssembly, then plain CPU, and remember what works. */
+async function pickFaceBackend(first) {
+  const order = [first].concat(FACE_BACKENDS).filter(function (b, i, a) { return b && FACE_BACKENDS.indexOf(b) >= 0 && a.indexOf(b) === i; });
+  for (let i = 0; i < order.length; i++) {
+    const be = order[i];
+    try {
+      if (be === 'wasm' && faceapi.tf.setWasmPaths) faceapi.tf.setWasmPaths(TF_WASM);
+      if (!(await faceapi.tf.setBackend(be))) continue;
+      await faceapi.tf.ready();
+      await withTimeout(faceWarmUp(), be === 'cpu' ? 90000 : 25000, be + ' too slow');
+      store.set('att_face_backend', be);
+      return be;
+    } catch (e) {
+      console.error('face mode ' + be + ' failed', e);
+    }
+  }
+  throw new Error('Face check is not supported on this device.');
+}
+
+/** After a failure, move on to the next mode in the list. */
+async function nextFaceBackend() {
+  const cur = faceapi.tf.getBackend();
+  const rest = FACE_BACKENDS.slice(FACE_BACKENDS.indexOf(cur) + 1);
+  if (!rest.length) throw new Error('Face check is not supported on this device.');
+  await pickFaceBackend(rest[0]);
+}
+
+async function detectFaces(img, inputSize) {
+  return faceapi
+    .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: inputSize, scoreThreshold: 0.45 }))
+    .withFaceLandmarks(true)
+    .withFaceDescriptors();
 }
 
 /** Returns one 128-number descriptor per face found, biggest face first. */
 async function faceDescriptors(img) {
   await loadFace();
-  const run = function () {
-    const task = faceapi
-      .detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.45 }))
-      .withFaceLandmarks(true)
-      .withFaceDescriptors();
-    // never leave the person waiting on a stuck face check
-    return Promise.race([Promise.resolve(task), new Promise(function (resolve, reject) {
-      setTimeout(function () { reject(new Error('Face check took too long')); }, 40000);
-    })]);
-  };
   let found;
   try {
-    found = await run();
+    found = await faceJob(function () { return detectFaces(img, 416); }, 30000);
   } catch (e) {
-    // some graphics chips fail in the GPU mode; the CPU mode is slower but works everywhere
-    console.error('face check failed, retrying on CPU', e);
+    console.error('face check failed, trying the next mode', e);
     try {
-      await faceapi.tf.setBackend('cpu');
-      await faceapi.tf.ready();
-      found = await run();
+      await nextFaceBackend();
+      found = await faceJob(function () { return detectFaces(img, 416); }, 60000);
     } catch (e2) {
       console.error(e2);
       throw new Error('Could not read the face on this device (' + (e2 && e2.message || e2) + ').');

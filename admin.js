@@ -156,7 +156,7 @@ function renderDay() {
     if (x.lunchOver) meta.push('<span class="pill warn">Lunch +' + dur(x.lunchOver) + '</span>');
     if (x.ot) meta.push('<span class="pill info">OT ' + dur(x.ot) + '</span>');
     if (x.in) meta.push('<span class="pill mute">Worked ' + dur(x.workedMin) + '</span>');
-    const badFace = ps.filter(function (p) { return /^NO MATCH|^No face/.test(p.face || ''); }).length;
+    const badFace = ps.filter(function (p) { return /^NO MATCH|^No face|^Face check failed/.test(p.face || ''); }).length;
     if (badFace) meta.push('<span class="pill bad">Face mismatch ' + badFace + '</span>');
     if (ps.some(function (p) { return p.by; })) meta.push('<span class="pill info">Punched on shared phone</span>');
     if (ps.length > 4) meta.push('<span class="pill mute">' + ps.length + ' punches</span>');
@@ -218,7 +218,7 @@ async function openPhoto(p) {
     '<div>' + esc(p.address || 'No address') + '</div>' +
     '<div class="muted small">' + p.lat + ', ' + p.lng + ' · ±' + esc(p.acc) + ' m GPS</div>' +
     (p.by ? '<div><span class="pill warn">Taken by ' + esc(p.by) + '</span></div>' : '') +
-    (p.face ? '<div><span class="pill ' + (/^Match|^Registered/.test(p.face) ? 'ok' : /^NO|^No face/.test(p.face) ? 'bad' : 'mute') + '">Face: ' + esc(p.face) + '</span></div>' : '') +
+    (p.face ? '<div><span class="pill ' + (/^Match|^Registered/.test(p.face) ? 'ok' : /^NO|^No face|^Face check failed/.test(p.face) ? 'bad' : 'mute') + '">Face: ' + esc(p.face) + '</span></div>' : '') +
     '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">' + fence +
     '<a class="btn sm ghost" href="' + map + '" target="_blank" rel="noopener">Open in Maps</a></div>';
   $('#photo-modal').classList.remove('hidden');

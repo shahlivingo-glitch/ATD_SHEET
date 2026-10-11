@@ -1,3 +1,5 @@
+const VERSION = '2026-10-11.4';
+
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
@@ -123,6 +125,7 @@ const ROUTES = {
   adminThumbs: adminThumbs_,
   adminPhoto: adminPhoto_,
   faceRefs: faceRefs_,
+  health: health_,
   adminSaveFace: adminSaveFace_,
   adminResetFace: adminResetFace_,
 };
@@ -142,7 +145,7 @@ function doPost(e) {
 }
 
 function doGet() {
-  return ContentService.createTextOutput(JSON.stringify({ ok: true, app: 'attendance', time: Date.now() }))
+  return ContentService.createTextOutput(JSON.stringify({ ok: true, app: 'attendance', version: VERSION, time: Date.now() }))
     .setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -587,6 +590,10 @@ function checkFaces_(targets, faces, forOthers, faceError, method, hasPhoto) {
   const out = { results: targets.map(function () { return ''; }), enroll: {} };
   if (method === 'SELFIE') return out;
   const strict = method === 'FACE' || faceStrict_();
+  if (!faces.length && faceError && hasPhoto) {
+    out.results = targets.map(function () { return 'Face check failed'; });
+    return out;
+  }
   if (method === 'FACE') {
     const unreg = targets.filter(function (t) { return !t.faceData; });
     if (unreg.length && !(hasPhoto && targets.length === 1 && faces.length === 1)) {
@@ -634,6 +641,19 @@ function saveFace_(id, desc, how) {
   sh.getRange(e.row, col.FaceData + 1).setValue(JSON.stringify(desc.map(function (v) { return Math.round(v * 1e4) / 1e4; })));
   if (col.FaceRegistered !== undefined) sh.getRange(e.row, col.FaceRegistered + 1).setValue(txt_(fmt_(new Date(), 'yyyy-MM-dd HH:mm') + ' (' + how + ')'));
   EMPLOYEES_MEMO = null;
+}
+
+function health_() {
+  const emps = employees_();
+  return {
+    version: VERSION,
+    employees: emps.length,
+    active: emps.filter(function (e) { return e.active; }).length,
+    facesRegistered: emps.filter(function (e) { return !!e.faceData; }).length,
+    faceMode: faceMode_(),
+    verifyInOut: verifyFor_('IN'),
+    verifyLunch: verifyFor_('LUNCH_OUT'),
+  };
 }
 
 function faceRefs_(req) {

@@ -66,6 +66,9 @@ async function refresh(quiet) {
 }
 
 function applyStatus(r, t0) {
+  if (!r || !r.profile || !r.summary) {
+    throw new Error('Incomplete reply from the server. Admin: update Code.gs and deploy a New version.');
+  }
   if (t0) S.offset = r.serverTime - Math.round((t0 + Date.now()) / 2);
   S.data = r;
   setTZ(r.tz);
@@ -258,6 +261,8 @@ async function openCamera(type, targets) {
   S.method = methodFor(type);
   S.auto = false;
   S.autoPaused = false;
+  S.offerSelfie = false;
+  S.faceFallback = false;
   S.camOpenedAt = Date.now();
   S.facing = S.targets.length ? 'environment' : 'user';
   S.photo = S.thumb = null;
@@ -285,13 +290,17 @@ async function openCamera(type, targets) {
   if (S.method === 'FACE') {
     await refs;
     const expected = S.targets.length ? S.targets : [S.data.profile];
+    if (!S.targets.length && S.data.profile.hasFace && !FL.refs[S.data.profile.id]) await loadFaceRefs();
     const missing = expected.filter(function (t) { return !FL.refs[t.id]; });
     if (!missing.length) {
       S.auto = true; // punch as soon as the face is recognised, no photo
       setAutoUI('Look at the camera');
-    } else if (expected.length === 1) {
+    } else if (expected.length === 1 && !(S.targets.length ? false : S.data.profile.hasFace)) {
       setAutoUI(null); // first time: one selfie registers the face
       toast('Face not registered yet. Take one selfie to register it.');
+    } else if (expected.length === 1) {
+      setAutoUI(null);
+      toast('Could not load your registered face' + (FL.refsError ? ': ' + FL.refsError : '') + '. Take a selfie instead.', true);
     } else {
       closeCamera();
       toast('No registered face for ' + missing.map(function (t) { return t.name; }).join(', ') + '. Ask the admin to register them.', true);
@@ -312,7 +321,7 @@ async function startStream() {
   if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) throw new Error('This browser has no camera support. Open the link in Chrome or Safari.');
   stopStream();
   S.stream = await navigator.mediaDevices.getUserMedia({
-    video: { facingMode: S.facing, width: { ideal: 1280 }, height: { ideal: 1280 } }, audio: false,
+    video: { facingMode: S.facing, width: { ideal: 1920 }, height: { ideal: 1440 }, aspectRatio: { ideal: 4 / 3 } }, audio: false,
   });
   const v = $('#video');
   v.classList.toggle('mirror', S.facing === 'user');
@@ -336,6 +345,7 @@ function setupZoom() {
   const set = t && t.getSettings ? t.getSettings() : {};
   Z.level = Z.hw ? (set.zoom || Z.hw.min) : 1;
   applyZoomUI();
+  if (Z.hw && Z.level > Z.hw.min) setZoom(Z.hw.min); // open in the widest view the camera has
 }
 
 function zoomRange() { return Z.hw ? [Z.hw.min, Z.hw.max] : [1, 4]; }
@@ -488,19 +498,29 @@ function faceOn() { return !!S.method && S.method !== 'SELFIE'; }
 const FL = { on: false, busy: false, timer: null, refs: {}, thr: 0.5, last: [] };
 
 async function loadFaceRefs() {
+  FL.refsAt = Date.now();
   try {
     const r = await api('faceRefs', { token: S.token });
     FL.refs = r.refs || {};
     FL.thr = r.threshold || 0.5;
-  } catch (e) { /* boxes still show, just without names */ }
+    FL.refsError = '';
+  } catch (e) {
+    FL.refsError = e.message;
+    if (e.auth) { closeCamera(); logout(e.message); }
+  }
 }
 
 function startFaceLoop() {
   if (!faceOn() || FL.on) return;
   FL.on = true;
-  $('#face-status').classList.remove('hidden');
-  $('#face-status').textContent = 'Starting face check...';
-  faceTick();
+  FL.loop = (FL.loop || 0) + 1;
+  FL.fails = 0;
+  FL.worked = false;
+  const fs = $('#face-status');
+  fs.classList.remove('hidden');
+  fs.style.background = '';
+  fs.textContent = faceReady ? 'Starting face check...' : 'Loading face check... (first time can take a minute)';
+  faceTick(FL.loop);
 }
 
 function stopFaceLoop() {
@@ -512,30 +532,45 @@ function stopFaceLoop() {
   FL.last = [];
 }
 
-async function faceTick() {
-  if (!FL.on) return;
+async function faceTick(loop) {
+  if (!FL.on || loop !== FL.loop) return; // an older camera session: let it end
   const v = $('#video');
-  if (v.videoWidth && !FL.busy) {
-    FL.busy = true;
+  if (v.videoWidth) {
     try {
       await loadFace();
-      const found = await faceapi
-        .detectAllFaces(v, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.45 }))
-        .withFaceLandmarks(true)
-        .withFaceDescriptors();
-      if (FL.on) drawFaceBoxes(found);
+      if (!FL.on || loop !== FL.loop) return;
+      // read faces from a small copy of the frame: much faster on phones
+      const small = FL.small || (FL.small = document.createElement('canvas'));
+      const sc = Math.min(1, 480 / Math.max(v.videoWidth, v.videoHeight));
+      small.width = Math.round(v.videoWidth * sc);
+      small.height = Math.round(v.videoHeight * sc);
+      small.getContext('2d').drawImage(v, 0, 0, small.width, small.height);
+      const found = await faceJob(function () { return detectFaces(small, 320); }, 12000);
+      FL.fails = 0;
+      FL.worked = true;
+      FL.broken = false;
+      if (FL.on && loop === FL.loop) drawFaceBoxes(found, 1 / sc);
     } catch (e) {
-      if (!FL.cpu) {
-        FL.cpu = true; // some graphics chips fail in the GPU mode; switch to the CPU mode once
-        try { await faceapi.tf.setBackend('cpu'); await faceapi.tf.ready(); } catch (e2) { /* keep trying */ }
-      } else if (FL.on) {
-        $('#face-status').textContent = 'Face check unavailable';
+      console.error('live face check', e);
+      FL.fails++;
+      if (FL.fails >= 2) {
+        FL.fails = 0;
+        try { await nextFaceBackend(); } catch (e2) { FL.broken = true; }
       }
-    } finally {
-      FL.busy = false;
+      if (FL.on && loop === FL.loop) $('#face-status').textContent = FL.broken ? 'Face check not working on this phone' : 'Retrying face check...';
     }
+    offerSelfieIfStuck();
   }
-  if (FL.on) FL.timer = setTimeout(faceTick, 250);
+  if (FL.on && loop === FL.loop) FL.timer = setTimeout(function () { faceTick(loop); }, 200);
+}
+
+/** Face-only mode must never trap anyone: if face check can't run, allow a selfie (flagged for the admin). */
+function offerSelfieIfStuck() {
+  if (!S.auto || S.offerSelfie || S.busy) return;
+  if (FL.broken || (!FL.worked && Date.now() - S.camOpenedAt > 25000)) {
+    S.offerSelfie = true;
+    setAutoUI('Face check not working. Tap to take a selfie', true);
+  }
 }
 
 function faceDistance(a, b) {
@@ -559,11 +594,19 @@ function classifyFace(desc) {
     if (!S.targets.length) return { color: '#ef4444', label: 'Not you (' + name + ')' };
     return { color: '#f59e0b', label: name + ' (not selected)' };
   }
-  if (!S.targets.length && !FL.refs[me.id]) return { color: '#ef4444', label: 'Not registered yet' };
+  if (!S.targets.length && !FL.refs[me.id]) {
+    // the server says this face is registered: the face list just hasn't arrived yet, so fetch it again
+    if (me.hasFace) {
+      if (Date.now() - (FL.refsAt || 0) > 4000) loadFaceRefs();
+      return { color: '#f59e0b', label: FL.refsError ? 'Face list failed: ' + FL.refsError : 'Loading your face...' };
+    }
+    return { color: '#ef4444', label: 'Not registered yet' };
+  }
   return { color: '#ef4444', label: 'Not registered' };
 }
 
-function drawFaceBoxes(found) {
+function drawFaceBoxes(found, scale) {
+  const sc = scale || 1;
   const v = $('#video'), c = $('#face-overlay');
   const cw = v.clientWidth, ch = v.clientHeight, dpr = window.devicePixelRatio || 1;
   if (c.width !== Math.round(cw * dpr) || c.height !== Math.round(ch * dpr)) {
@@ -574,14 +617,14 @@ function drawFaceBoxes(found) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, cw, ch);
   // the video uses object-fit: cover, and the front camera is shown mirrored
-  const k = Math.max(cw / v.videoWidth, ch / v.videoHeight);
+  const k = Math.min(cw / v.videoWidth, ch / v.videoHeight); // whole picture is shown (object-fit: contain)
   const ox = (cw - v.videoWidth * k) / 2, oy = (ch - v.videoHeight * k) / 2;
   const mirror = S.facing === 'user';
   FL.last = found.map(function (f) {
     const b = f.detection.box;
     const who = classifyFace(f.descriptor);
-    let x = ox + b.x * k;
-    let y = oy + b.y * k, w = b.width * k, h = b.height * k;
+    let x = ox + b.x * sc * k;
+    let y = oy + b.y * sc * k, w = b.width * sc * k, h = b.height * sc * k;
     if (mirror) x = cw - x - w;
     const dz = digitalZoom();
     if (dz !== 1) {
@@ -642,8 +685,8 @@ async function capture() {
   raw.getContext('2d').drawImage(v, sx, sy, sw, sh, 0, 0, W, H);
 
   S.faces = [];
-  S.faceError = false;
-  if (faceOn()) {
+  S.faceError = !!S.faceFallback;
+  if (faceOn() && !S.faceFallback) {
     stopFaceLoop(); // one face job at a time
     const shoot = $('#btn-shoot');
     shoot.disabled = true;
@@ -666,7 +709,7 @@ async function capture() {
       startFaceLoop();
       return; // camera stays live for another try
     }
-    if (faceStrict() && S.faceError) { startFaceLoop(); return; }
+
   }
 
   const c = $('#canvas');
@@ -896,6 +939,13 @@ async function autoPunch(found) {
 }
 
 $('#auto-hint').addEventListener('click', function () {
+  if (S.offerSelfie) {
+    S.auto = false;
+    S.faceFallback = true; // the punch is saved with "Face check failed" for the admin to review
+    setAutoUI(null);
+    updateGeoUI();
+    return;
+  }
   if (!S.autoPaused) return;
   S.autoPaused = false;
   setAutoUI('Look at the camera');
