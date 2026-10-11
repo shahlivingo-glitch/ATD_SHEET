@@ -99,6 +99,7 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px co
 .btn.danger { background: var(--out); color: #fff; }
 .icon-btn { background: none; border: 0; padding: 8px; border-radius: 10px; cursor: pointer; line-height: 0; color: var(--ink); }
 .icon-btn svg { width: 22px; height: 22px; }
+.icon-btn.spin svg { animation: spin .9s linear infinite; }
 
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
 .pill.ok { background: var(--ok-bg); color: var(--ok-ink); }

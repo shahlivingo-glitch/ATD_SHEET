@@ -2,11 +2,13 @@
 
 const API_URL = (window.ATTENDANCE_CONFIG || {}).apiUrl || '';
 
-async function api(action, data) {
+async function api(action, data, timeoutMs) {
   if (!API_URL || API_URL.indexOf('script.google.com') < 0) {
     throw new Error('App is not configured yet: put the Apps Script URL in config.js');
   }
   let res;
+  const ctrl = window.AbortController ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(function () { ctrl.abort(); }, timeoutMs || 45000) : null;
   try {
     // text/plain keeps this a "simple" request: Apps Script cannot answer CORS preflights.
     res = await fetch(API_URL, {
@@ -14,12 +16,15 @@ async function api(action, data) {
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify(Object.assign({ action: action }, data || {})),
       redirect: 'follow',
+      signal: ctrl ? ctrl.signal : undefined,
     });
   } catch (e) {
+    if (e && e.name === 'AbortError') throw new Error('The server is taking too long. Check the internet and try again.');
     throw new Error(navigator.onLine === false
       ? 'No internet connection. Please try again.'
       : 'Cannot reach the attendance server. Admin: check the Apps Script deployment (Who has access = Anyone) and the URL in config.js.');
   }
+  if (timer) clearTimeout(timer);
   let j;
   try { j = await res.json(); } catch (e) { throw new Error('Server error (' + res.status + '). Please try again.'); }
   if (!j.ok) {

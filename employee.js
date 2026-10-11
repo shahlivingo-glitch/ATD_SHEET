@@ -55,6 +55,8 @@ $('#login-form').addEventListener('submit', async function (ev) {
 
 async function refresh(quiet) {
   if (!S.token) return;
+  $('#btn-refresh').classList.add('spin');
+  const slow = quiet ? null : setTimeout(function () { toast('Server is slow, still updating...'); }, 9000);
   try {
     const t0 = Date.now();
     const r = await api('status', { token: S.token });
@@ -62,6 +64,9 @@ async function refresh(quiet) {
   } catch (e) {
     if (e.auth) return logout(e.message);
     if (!quiet) toast(e.message, true);
+  } finally {
+    clearTimeout(slow);
+    $('#btn-refresh').classList.remove('spin');
   }
 }
 
@@ -73,6 +78,8 @@ function applyStatus(r, t0) {
   S.data = r;
   setTZ(r.tz);
   store.set('att_company', r.company);
+  // remembered so the next app start shows this screen instantly while it updates
+  store.set('att_last', { data: r, offset: S.offset });
   renderHome();
   if (anyFaceUse()) loadFace().catch(function () {}); // download the face models early
 }
@@ -88,6 +95,7 @@ function logout(msg) {
   S.token = null;
   S.data = null;
   store.del('att_token');
+  store.del('att_last');
   show('v-login');
   if (msg) toast(msg, true);
 }
@@ -857,7 +865,7 @@ async function sendPunch(photo, thumb, faces, faceError) {
     deviceTime: new Date().toISOString(), device: navigator.userAgent,
     forEmpIds: S.targets.map(function (t) { return t.id; }),
     faces: faces || [], faceError: !!faceError,
-  });
+  }, 90000);
   stopStream();
   if (S.watchId !== null) navigator.geolocation.clearWatch(S.watchId);
   S.watchId = null;
@@ -966,7 +974,17 @@ setInterval(function () { if (!document.hidden && !$('#v-home').classList.contai
   tick();
   if (S.token) {
     show('v-home');
-    $('#h-name').textContent = 'Loading...';
+    const last = store.get('att_last');
+    if (last && last.data && last.data.profile) {
+      // show the last known screen straight away; the server reply replaces it
+      S.offset = last.offset || 0;
+      S.data = last.data;
+      setTZ(last.data.tz);
+      renderHome();
+      tick();
+    } else {
+      $('#h-name').textContent = 'Loading...';
+    }
     refresh();
   } else {
     show('v-login');
