@@ -1,6 +1,6 @@
-const VERSION = '2026-10-11.11';
+const VERSION = '2026-10-11.12';
 
-const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts' };
+const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
   'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered', 'LunchStart'];
@@ -9,6 +9,7 @@ const PUNCH_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Action', 'Latitud
   'ThumbID', 'DeviceTime', 'Device', 'PunchedBy', 'FaceMatch', 'PunchID'];
 const LOC_COLS = ['Name', 'Latitude', 'Longitude', 'RadiusM'];
 const HOL_COLS = ['Date', 'Name'];
+const OUT_COLS = ['ID', 'WorkDate', 'EmpID', 'Name', 'Start', 'End', 'Minutes', 'MaxDistanceM', 'Place', 'Updated'];
 const ALERT_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Type', 'Detail', 'Latitude', 'Longitude'];
 
 const DEFAULT_SETTINGS = [
@@ -39,6 +40,7 @@ function setup() {
   ensureSheet_(ss, SH.LOC, LOC_COLS, ['Name']);
   ensureSheet_(ss, SH.HOL, HOL_COLS, ['Date']);
   ensureSheet_(ss, SH.ALERT, ALERT_COLS, ['WorkDate', 'EmpID']);
+  ensureSheet_(ss, SH.OUT, OUT_COLS, ['ID', 'WorkDate', 'EmpID']);
   ensureSheet_(ss, SH.SET, ['Key', 'Value', 'Notes'], ['Key', 'Value']);
 
   const have = settings_();
@@ -100,7 +102,7 @@ function onOpen() {
 
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
-  if (cache.get('schema') === '6') return;
+  if (cache.get('schema') === '7') return;
   const ss = SpreadsheetApp.getActive();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
@@ -113,7 +115,8 @@ function ensureSchema_() {
       }
     });
   });
-  cache.put('schema', '6', 21600);
+  cache.put('schema', '7', 21600);
+  if (!ss.getSheetByName(SH.OUT)) ensureSheet_(ss, SH.OUT, OUT_COLS, ['ID', 'WorkDate', 'EmpID']);
   if (!ss.getSheetByName(SH.ALERT)) ensureSheet_(ss, SH.ALERT, ALERT_COLS, ['WorkDate', 'EmpID']);
 }
 
@@ -149,6 +152,7 @@ const ROUTES = {
   adminLogin: adminLogin_,
   adminDay: adminDay_,
   reportAway: reportAway_,
+  reportOutside: reportOutside_,
   adminTestPush: adminTestPush_,
   adminReport: adminReport_,
   adminEmployees: adminEmployees_,
@@ -371,6 +375,62 @@ function reportAway_(req) {
   return { logged: true };
 }
 
+/**
+ * The Android app reports each trip outside the work location while working:
+ * first when it starts (End empty = still outside), then again when the person is back.
+ */
+function reportOutside_(req) {
+  const e = authEmp_(req.token);
+  const id = String(req.id || '');
+  if (!/^[\w-]{8,64}$/.test(id)) throw new Error('Bad id');
+  const now = Date.now();
+  const start = Math.min(Number(req.start), now + 300000);
+  const end = req.end ? Math.min(Number(req.end), now + 300000) : null;
+  if (!isFinite(start) || start < now - 7 * 864e5) throw new Error('Bad start time');
+  if (end !== null && (!isFinite(end) || end < start)) throw new Error('Bad end time');
+  const row = [txt_(id), txt_(workDate_(e, new Date(start))), txt_(e.id), txt_(e.name), new Date(start), end ? new Date(end) : '',
+    end ? Math.round((end - start) / 60000) : '', Math.round(num_(req.maxDistance, 0)), txt_(String(req.place || '').slice(0, 60)), new Date()];
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const sh = sheet_(SH.OUT);
+    const last = sh.getLastRow();
+    let found = 0;
+    if (last >= 2) {
+      const first = Math.max(2, last - 499);
+      const ids = sh.getRange(first, 1, last - first + 1, 3).getValues();
+      for (let i = ids.length - 1; i >= 0; i--) {
+        if (String(ids[i][0]) === id) {
+          if (String(ids[i][2]).toUpperCase() !== e.id.toUpperCase()) throw new Error('Not your record');
+          found = first + i;
+          break;
+        }
+      }
+    }
+    if (found) sh.getRange(found, 1, 1, row.length).setValues([row]);
+    else sh.appendRow(row);
+  } finally {
+    lock.releaseLock();
+  }
+  return { saved: true };
+}
+
+/** Trips outside for a date range; a trip without an end is still going on. */
+function outsideFor_(from, to) {
+  const sh = SpreadsheetApp.getActive().getSheetByName(SH.OUT);
+  if (!sh || sh.getLastRow() < 2) return [];
+  const c = headerMap_(sh);
+  const last = sh.getLastRow();
+  const first = Math.max(2, last - 4999);
+  const now = Date.now();
+  return sh.getRange(first, 1, last - first + 1, sh.getLastColumn()).getValues().map(function (r) {
+    const st = r[c.Start], en = r[c.End];
+    const startMs = st instanceof Date ? st.getTime() : 0, endMs = en instanceof Date ? en.getTime() : null;
+    return { id: String(r[c.ID]), date: dstr_(r[c.WorkDate]), empId: String(r[c.EmpID]).trim(), start: startMs, end: endMs,
+      minutes: Math.max(0, Math.round(((endMs || now) - startMs) / 60000)), maxDistance: num_(r[c.MaxDistanceM], 0), place: String(r[c.Place]) };
+  }).filter(function (o) { return o.start && o.date >= from && o.date <= to; });
+}
+
 function alertsFor_(date) {
   const sh = SpreadsheetApp.getActive().getSheetByName(SH.ALERT);
   if (!sh || sh.getLastRow() < 2) return [];
@@ -541,7 +601,8 @@ function adminDay_(req) {
   const date = dateParam_(req.date) || fmt_(new Date(), 'yyyy-MM-dd');
   const rep = buildReport_(date, date, '');
   const punches = punchesSince_(date, function (p) { return p.date === date; }).map(publicPunch_);
-  return { date: date, rows: rep.days, punches: punches, alerts: alertsFor_(date), settings: publicSettings_(), serverTime: Date.now() };
+  return { date: date, rows: rep.days, punches: punches, alerts: alertsFor_(date), outside: outsideFor_(date, date),
+    settings: publicSettings_(), serverTime: Date.now() };
 }
 
 function adminReport_(req) {
@@ -712,14 +773,31 @@ function buildReport_(from, to, empId) {
     return e.active || all.some(function (p) { return p.empId === e.id; });
   });
 
+  const outByKey = {};
+  outsideFor_(from, to).forEach(function (o) { (outByKey[o.empId.toUpperCase() + '|' + o.date] = outByKey[o.empId.toUpperCase() + '|' + o.date] || []).push(o); });
   const days = [], totals = [];
   emps.forEach(function (e) {
     const t = { id: e.id, name: e.name, dept: e.dept, shift: e.shiftStart + '-' + e.shiftEnd, present: 0, halfDay: 0,
-      absent: 0, late: 0, lateMin: 0, earlyMin: 0, workedMin: 0, otMin: 0, lunchOverMin: 0, off: 0, missedOut: 0 };
+      absent: 0, late: 0, lateMin: 0, earlyMin: 0, workedMin: 0, otMin: 0, lunchOverMin: 0, off: 0, missedOut: 0,
+      outsideCount: 0, outsideMin: 0 };
     dates.forEach(function (d) {
       if (e.joinDate && d < e.joinDate) return;
       const s = summarize_(e, d, byKey[e.id + '|' + d] || [], now, hol);
       s.id = e.id; s.name = e.name; s.dept = e.dept;
+      const outs = outByKey[e.id.toUpperCase() + '|' + d] || [];
+      s.outsideCount = outs.length;
+      s.outsideMin = outs.reduce(function (a, o) { return a + o.minutes; }, 0);
+      s.outsideNow = outs.some(function (o) { return !o.end; });
+      // minutes of those trips inside this person's lunch hour (forgot to punch Lunch Out?)
+      const ls = e.lunchStart || defaultLunchStart_();
+      if (ls && outs.length) {
+        const lw = dateAt_(d, toMin_(ls)).getTime(), le = lw + num_(e.lunch, 0) * 60000;
+        s.outsideLunchMin = outs.reduce(function (a, o) {
+          return a + Math.max(0, Math.round((Math.min(o.end || Date.now(), le) - Math.max(o.start, lw)) / 60000));
+        }, 0);
+      } else s.outsideLunchMin = 0;
+      t.outsideCount += s.outsideCount;
+      t.outsideMin += s.outsideMin;
       days.push(s);
       if (s.status === 'Present') t.present++;
       if (s.status === 'Half Day') t.halfDay++;

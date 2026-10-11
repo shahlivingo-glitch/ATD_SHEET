@@ -90,12 +90,73 @@
     return best;
   }
 
+  const OUT_MIN_MS = 2 * 60000;       // shorter than this outside = GPS wobble, ignored
+  const OT_LIMIT_MS = 6 * 3600000;     // forgot to Check Out: stop recording 6 h after shift end
+
+  /** Checked in and not on a punched lunch break. */
+  function working(d) { return (d.next || []).indexOf('OUT') >= 0; }
+
   function watchNeeded(d) {
-    const r = d.reminders, win = lunchWindow(d);
-    if (!r || !win || !(r.fences || []).length) return false;
-    if ((d.next || []).indexOf('LUNCH_OUT') < 0) return false; // not checked in, already at lunch, or checked out
-    if (store.get(awayKey(d))) return false;                  // already alerted today
-    return Date.now() < win.end;                                 // from check-in until the end of lunch hour
+    const r = d.reminders;
+    if (!r || !(r.fences || []).length || !working(d)) return false;
+    return Date.now() < shiftEndTime(d) + OT_LIMIT_MS;
+  }
+
+  /* ---- trips outside the work location ---- */
+  let trip = store.get('att_trip');            // the trip going on now, kept if the app restarts
+  let outQueue = store.get('att_out_q') || [];  // reports waiting for the internet
+
+  function saveTrip() {
+    if (trip) store.set('att_trip', trip); else store.del('att_trip');
+    render();
+  }
+
+  function queueTrip(t, end) {
+    outQueue = outQueue.filter(function (q) { return q.id !== t.id; });
+    outQueue.push({ id: t.id, start: t.start, end: end || null, maxDistance: Math.round(t.maxDist || 0), place: t.place || '' });
+    store.set('att_out_q', outQueue);
+    flushTrips();
+  }
+
+  let flushing = false;
+  async function flushTrips() {
+    if (flushing || !outQueue.length || !S.token) return;
+    flushing = true;
+    try {
+      while (outQueue.length) {
+        const q = outQueue[0];
+        const ok = await post(Object.assign({ action: 'reportOutside', token: S.token }, q));
+        if (!ok) break; // try again later
+        outQueue.shift();
+        store.set('att_out_q', outQueue);
+      }
+    } finally {
+      flushing = false;
+    }
+  }
+
+  /** POST to the server through Android's own HTTP (not slowed down in the background). */
+  async function post(body) {
+    try {
+      const http = plugin('CapacitorHttp');
+      if (http && http.request) {
+        const r = await http.request({ method: 'POST', url: API_URL, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, data: JSON.stringify(body) });
+        const j = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
+        return !!(j && (j.ok || /not your|bad /i.test(j.error || ''))); // drop records the server can never accept
+      }
+      await api(body.action, body);
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function closeTrip(end) {
+    if (!trip) return;
+    const t = trip;
+    trip = null;
+    saveTrip();
+    queueTrip(t, Math.max(end, t.start));
   }
 
   async function updateWatch(d) {
@@ -105,7 +166,7 @@
       try {
         W.id = await BG.addWatcher({
           backgroundTitle: 'Attendance',
-          backgroundMessage: 'Checking the work area during lunch hour.',
+          backgroundMessage: 'Recording when you leave the work area during work hours.',
           requestPermissions: true, stale: false, distanceFilter: 25,
         }, onLocation);
         W.error = '';
@@ -127,6 +188,7 @@
     if (W.id !== null && BG) BG.removeWatcher({ id: W.id }).catch(function () {});
     W.id = null;
     W.outSince = null;
+    closeTrip(Date.now());
     render();
   }
 
@@ -155,14 +217,18 @@
       const win = lunchWindow(d);
       parts.push('<b>Reminders on</b>' + (win ? ' · lunch ' + hm(win.start) + '–' + hm(win.end) : r.autoLunch ? ' · automatic lunch' : ' · no lunch time set'));
       let range;
+      const nx = d.next || [];
       if (!(r.fences || []).length) range = 'off: no work location set by the admin';
-      else if (store.get(awayKey(d))) range = 'away alert already sent today';
-      else if (W.id !== null) range = W.outSince ? 'active, you are outside the work area' : 'active';
       else if (W.error) range = W.error;
-      else if ((d.next || []).indexOf('LUNCH_OUT') < 0) range = (d.next || []).indexOf('IN') >= 0 ? 'starts after Check In' : 'not needed now';
-      else if (win && Date.now() >= win.end) range = 'done for today';
+      else if (W.id !== null) range = trip ? '<b style="color:var(--bad-ink)">you are outside since ' + hm(trip.start) + '</b>' : 'on';
+      else if (nx.indexOf('IN') >= 0) range = 'starts after Check In';
+      else if (nx.indexOf('LUNCH_IN') >= 0) range = 'paused during lunch break';
+      else if (!nx.length) range = 'off (checked out)';
+      else if (working(d) && Date.now() >= shiftEndTime(d) + OT_LIMIT_MS) range = 'stopped: shift ended long ago, please Check Out';
       else range = 'starting...';
-      parts.push('Lunch-hour range check: ' + range);
+      parts.push('Location while working: ' + range);
+      if (store.get(awayKey(d))) parts.push('Lunch-hour away alert sent today');
+      if (outQueue.length) parts.push(outQueue.length + ' location record' + (outQueue.length > 1 ? 's' : '') + ' waiting for internet');
     }
     if (W.notif && W.notif !== 'granted') parts.push('<span style="color:var(--bad-ink)"><b>Notifications are blocked.</b> Allow them for Attendance in phone Settings.</span>');
     el.innerHTML = parts.join('<br>');
@@ -189,39 +255,48 @@
     if (!out) return;
     const margin = Math.max(25, Math.min(loc.accuracy || 0, 100)); // don't count GPS wobble as leaving
     const now = Date.now();
-    if (out.over <= margin) { if (W.outSince) { W.outSince = null; render(); } return; }
-    if (!W.outSince) { W.outSince = now; render(); }
+    if (out.over <= margin) {
+      W.outSince = null;
+      if (trip) closeTrip(now);
+      return;
+    }
+    if (!W.outSince) W.outSince = now;
+    if (!trip && now - W.outSince >= OUT_MIN_MS) {
+      trip = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 10), empId: d.profile.id,
+        start: W.outSince, maxDist: Math.round(out.over), place: out.name };
+      saveTrip();
+      queueTrip(trip, null); // the admin sees "outside now" straight away
+    } else if (trip && out.over > trip.maxDist) {
+      trip.maxDist = Math.round(out.over);
+      store.set('att_trip', trip);
+    }
+    // lunch-hour alert: outside too long in lunch hour without punching Lunch Out
     const win = lunchWindow(d);
-    const awayMs = now - Math.max(W.outSince, win.start); // only time inside lunch hour counts
-    if (now >= win.start && awayMs >= d.reminders.awayMinutes * 60000) alertAway(d, out, Math.round(awayMs / 60000), loc);
+    if (win && (d.next || []).indexOf('LUNCH_OUT') >= 0 && !store.get(awayKey(d)) && now >= win.start && now < win.end + 3600000) {
+      const awayMs = now - Math.max(W.outSince, win.start);
+      if (awayMs >= d.reminders.awayMinutes * 60000) alertAway(d, out, Math.round(awayMs / 60000), loc);
+    }
   }
 
   async function alertAway(d, out, minutes, loc) {
     store.set(awayKey(d), Date.now());
-    stopWatch();
+    render();
     await setup();
     try {
       await LN.schedule({ notifications: [{ id: ID.AWAY, channelId: CHANNEL, title: 'You left without punching Lunch Out',
         body: 'You have been outside ' + out.name + ' for ' + minutes + ' minutes during lunch hour. Open the app and punch Lunch Out.',
         schedule: { at: new Date(Date.now() + 1000), allowWhileIdle: true } }] });
     } catch (e) { console.error('away alert', e); }
-    const body = { action: 'reportAway', token: S.token, minutes: minutes, distance: Math.round(out.over), place: out.name,
-      lat: loc.latitude, lng: loc.longitude };
-    try {
-      // Android slows down web requests from apps in the background; its own HTTP is not slowed
-      const http = plugin('CapacitorHttp');
-      if (http && http.request) {
-        await http.request({ method: 'POST', url: API_URL, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, data: JSON.stringify(body) });
-      } else {
-        await api('reportAway', body);
-      }
-    } catch (e) { /* the phone still alerted the person */ }
+    post({ action: 'reportAway', token: S.token, minutes: minutes, distance: Math.round(out.over), place: out.name,
+      lat: loc.latitude, lng: loc.longitude });
   }
 
   window.NativeApp = {
     onStatus: function (d) {
       if (!d || !d.profile) return;
       W.status = d;
+      if (trip && (!working(d) || trip.empId !== d.profile.id)) closeTrip(Date.now());
+      flushTrips();
       render();
       if (LN && LN.checkPermissions) LN.checkPermissions().then(function (p) { W.notif = p.display; render(); }).catch(function () {});
       scheduleReminders(d).catch(function (e) { console.error(e); });

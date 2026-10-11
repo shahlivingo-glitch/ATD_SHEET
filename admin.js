@@ -150,6 +150,12 @@ function renderDay() {
         '<b>' + (p ? fmtTime(p.ts) : '--') + flag + '</b>' + LABELS[type] + '</button>';
     };
     const meta = [];
+    if (x.outsideCount) {
+      const txt = x.outsideNow
+        ? 'Outside now · ' + x.outsideCount + '× ' + dur(x.outsideMin)
+        : 'Outside ' + x.outsideCount + '× · ' + dur(x.outsideMin) + (x.outsideLunchMin ? ' (' + dur(x.outsideLunchMin) + ' in lunch hour)' : '');
+      meta.push('<button class="pill ' + (x.outsideNow ? 'bad' : 'warn') + '" data-outside="' + esc(x.id) + '" style="border:0;cursor:pointer">' + esc(txt) + '</button>');
+    }
     if (x.short) meta.push('<span class="pill bad">Worked under ' + ((A.settings && A.settings.minHalfDay) || 3) + 'h</span>');
     if (x.late) meta.push('<span class="pill warn">Late ' + dur(x.late) + '</span>');
     if (x.early) meta.push('<span class="pill warn">Left ' + dur(x.early) + ' early</span>');
@@ -197,7 +203,24 @@ async function fetchThumbs(ids) {
   } catch (e) { /* thumbnails are optional */ } finally { thumbBusy = false; }
 }
 
+function openOutside(empId) {
+  const r = A.day;
+  const row = (r.rows || []).find(function (x) { return x.id === empId; });
+  const list = (r.outside || []).filter(function (o) { return o.empId === empId; }).sort(function (a, b) { return a.start - b.start; });
+  $('#out-title').textContent = (row ? row.name : empId) + ' · outside the work location';
+  $('#out-list').innerHTML = list.length ? '<div class="table-wrap" style="box-shadow:none"><table><thead><tr><th>Left</th><th>Back</th>' +
+    '<th class="num">Minutes</th><th class="num">Farthest</th></tr></thead><tbody>' + list.map(function (o) {
+      return '<tr><td>' + fmtTime(o.start) + '</td><td>' + (o.end ? fmtTime(o.end) : '<span class="pill bad">still outside</span>') +
+        '</td><td class="num">' + o.minutes + '</td><td class="num">' + (o.maxDistance ? o.maxDistance + ' m' : '') + '</td></tr>';
+    }).join('') + '</tbody></table></div>' +
+    '<p class="muted small" style="margin:10px 0 0">Recorded by the Android app while the employee is working (Check In to Check Out, not during a punched lunch break). Trips under 2 minutes are ignored.</p>'
+    : '<div class="empty">No trips outside.</div>';
+  $('#outside-modal').classList.remove('hidden');
+}
+
 $('#day-list').addEventListener('click', function (ev) {
+  const ob = ev.target.closest('[data-outside]');
+  if (ob) { openOutside(ob.dataset.outside); return; }
   const b = ev.target.closest('[data-photo]');
   if (b) openPhoto(A.punchesById[b.dataset.photo]);
 });
@@ -262,23 +285,26 @@ function renderReport() {
   let html = '<h3 style="font-size:16px;margin:4px 0 8px">Summary ' + esc(r.from) + ' to ' + esc(r.to) + '</h3>' +
     '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Shift</th><th class="num">Present</th><th class="num">Half day</th>' +
     '<th class="num">Absent</th><th class="num">Off</th><th class="num">Late days</th><th class="num">Late total</th><th class="num">Early leave</th>' +
-    '<th class="num">Worked hrs</th><th class="num">OT hrs</th><th class="num">Lunch over</th><th class="num">No check-out</th></tr></thead><tbody>' +
+    '<th class="num">Worked hrs</th><th class="num">OT hrs</th><th class="num">Lunch over</th><th class="num">No check-out</th>' +
+    '<th class="num">Times outside</th><th class="num">Outside</th></tr></thead><tbody>' +
     r.totals.map(function (t) {
       return '<tr><td>' + esc(t.id) + '</td><td>' + esc(t.name) + '</td><td>' + esc(shiftText(t.shift)) + '</td><td class="num">' + t.present +
         '</td><td class="num">' + t.halfDay + '</td><td class="num">' + t.absent + '</td><td class="num">' + t.off + '</td><td class="num">' + t.late +
         '</td><td class="num">' + dur(t.lateMin) + '</td><td class="num">' + dur(t.earlyMin) + '</td><td class="num">' + hrs(t.workedMin) +
-        '</td><td class="num">' + hrs(t.otMin) + '</td><td class="num">' + dur(t.lunchOverMin) + '</td><td class="num">' + t.missedOut + '</td></tr>';
+        '</td><td class="num">' + hrs(t.otMin) + '</td><td class="num">' + dur(t.lunchOverMin) + '</td><td class="num">' + t.missedOut +
+        '</td><td class="num">' + (t.outsideCount || 0) + '</td><td class="num">' + dur(t.outsideMin || 0) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
 
   html += '<h3 style="font-size:16px;margin:20px 0 8px">Day by day</h3>' +
     '<div class="table-wrap"><table><thead><tr><th>Date</th><th>ID</th><th>Name</th><th>Status</th><th>In</th><th>Lunch out</th><th>Lunch in</th><th>Out</th>' +
-    '<th class="num">Worked</th><th class="num">Lunch</th><th class="num">Late</th><th class="num">Early</th><th class="num">OT</th></tr></thead><tbody>' +
+    '<th class="num">Worked</th><th class="num">Lunch</th><th class="num">Late</th><th class="num">Early</th><th class="num">OT</th><th class="num">Outside</th></tr></thead><tbody>' +
     r.days.map(function (d) {
       return '<tr><td>' + esc(d.date) + '</td><td>' + esc(d.id) + '</td><td>' + esc(d.name) + '</td><td>' + statusPill(d.status) + '</td><td>' +
         (d.in ? fmtTime(d.in) : '') + '</td><td>' + (d.lunchOut ? fmtTime(d.lunchOut) : '') + '</td><td>' + (d.lunchIn ? fmtTime(d.lunchIn) : '') +
         '</td><td>' + (d.out ? fmtTime(d.out) : '') + '</td><td class="num">' + (d.in ? dur(d.workedMin) : '') + '</td><td class="num">' +
         (d.breakMin ? dur(d.breakMin) : '') + '</td><td class="num">' + (d.late ? dur(d.late) : '') + '</td><td class="num">' +
-        (d.early ? dur(d.early) : '') + '</td><td class="num">' + (d.ot ? dur(d.ot) : '') + '</td></tr>';
+        (d.early ? dur(d.early) : '') + '</td><td class="num">' + (d.ot ? dur(d.ot) : '') + '</td><td class="num">' +
+        (d.outsideCount ? d.outsideCount + '× ' + dur(d.outsideMin) : '') + '</td></tr>';
     }).join('') + '</tbody></table></div>';
   $('#rep-out').innerHTML = html;
 }
@@ -289,10 +315,11 @@ $('#rep-csv').addEventListener('click', function () {
   const q = function (v) { v = String(v === null || v === undefined ? '' : v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
   const t = function (ms) { return ms ? fmtTime(ms) : ''; };
   const lines = [['Date', 'Employee ID', 'Name', 'Department', 'Shift', 'Status', 'In', 'Lunch Out', 'Lunch In', 'Out',
-    'Worked (min)', 'Lunch (min)', 'Late (min)', 'Early leave (min)', 'Overtime (min)', 'Lunch over (min)'].join(',')];
+    'Worked (min)', 'Lunch (min)', 'Late (min)', 'Early leave (min)', 'Overtime (min)', 'Lunch over (min)',
+    'Times outside', 'Outside (min)', 'Outside in lunch hour (min)'].join(',')];
   r.days.forEach(function (d) {
     lines.push([d.date, d.id, d.name, d.dept, d.shift, d.status, t(d.in), t(d.lunchOut), t(d.lunchIn), t(d.out),
-      d.workedMin, d.breakMin, d.late, d.early, d.ot, d.lunchOver].map(q).join(','));
+      d.workedMin, d.breakMin, d.late, d.early, d.ot, d.lunchOver, d.outsideCount || 0, d.outsideMin || 0, d.outsideLunchMin || 0].map(q).join(','));
   });
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
