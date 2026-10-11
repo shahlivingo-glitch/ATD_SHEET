@@ -1,4 +1,4 @@
-const VERSION = '2026-10-11.4';
+const VERSION = '2026-10-11.5';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays' };
 
@@ -40,7 +40,7 @@ function setup() {
   DEFAULT_SETTINGS.forEach(function (d) {
     if (!(d[0] in have)) sheet_(SH.SET).appendRow([d[0], txt_(d[1]), d[2]]);
   });
-  SETTINGS_MEMO = null;
+  clearDataCache_();
   const s = settings_();
   if (!s.ADMIN_PASSWORD) setSetting_('ADMIN_PASSWORD', 'admin' + Math.floor(100000 + Math.random() * 900000));
   if (!s.PHOTO_FOLDER_ID) setSetting_('PHOTO_FOLDER_ID', DriveApp.createFolder(ss.getName() + ' - Selfies').getId());
@@ -56,11 +56,37 @@ function setup() {
   });
   try { Maps.newGeocoder().reverseGeocode(19.076, 72.8777); } catch (e) {   }
 
+  clearDataCache_();
   const msg = 'Setup complete.\n\nAdmin password: ' + settings_().ADMIN_PASSWORD +
     '\n(Change it in the Settings tab or from the dashboard.)\n\nNow deploy: Deploy > New deployment > Web app,' +
     ' Execute as: Me, Who has access: Anyone.';
   Logger.log(msg);
   try { SpreadsheetApp.getUi().alert(msg); } catch (e) {   }
+}
+
+const DATA_CACHE = ['emp_v1', 'set_v1', 'hol_v1'];
+
+function cacheGet_(key) {
+  try { const v = CacheService.getScriptCache().get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+
+function cachePut_(key, value) {
+  try { const v = JSON.stringify(value); if (v.length < 95000) CacheService.getScriptCache().put(key, v, 600); } catch (e) { }
+}
+
+function clearDataCache_() {
+  try { CacheService.getScriptCache().removeAll(DATA_CACHE); } catch (e) { }
+  EMPLOYEES_MEMO = null;
+  SETTINGS_MEMO = null;
+}
+
+function forgetEmployees_() {
+  try { CacheService.getScriptCache().remove('emp_v1'); } catch (e) { }
+  EMPLOYEES_MEMO = null;
+}
+
+function onEdit() {
+  clearDataCache_();
 }
 
 function onOpen() {
@@ -366,7 +392,7 @@ function adminReport_(req) {
 
 function adminEmployees_(req) {
   authAdmin_(req.token);
-  EMPLOYEES_MEMO = null;
+  forgetEmployees_();
   return {
     employees: employees_().map(function (e) {
       e.hasFace = !!e.faceData;
@@ -398,7 +424,7 @@ function adminSaveEmployee_(req) {
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
-    EMPLOYEES_MEMO = null;
+    forgetEmployees_();
   const sh = sheet_(SH.EMP);
     const col = headerMap_(sh);
     const existing = findEmployee_(id);
@@ -633,14 +659,14 @@ function checkFaces_(targets, faces, forOthers, faceError, method, hasPhoto) {
 }
 
 function saveFace_(id, desc, how) {
-  EMPLOYEES_MEMO = null;
+  forgetEmployees_();
   const sh = sheet_(SH.EMP);
   const col = headerMap_(sh);
   const e = findEmployee_(id);
   if (!e || col.FaceData === undefined) return;
   sh.getRange(e.row, col.FaceData + 1).setValue(JSON.stringify(desc.map(function (v) { return Math.round(v * 1e4) / 1e4; })));
   if (col.FaceRegistered !== undefined) sh.getRange(e.row, col.FaceRegistered + 1).setValue(txt_(fmt_(new Date(), 'yyyy-MM-dd HH:mm') + ' (' + how + ')'));
-  EMPLOYEES_MEMO = null;
+  forgetEmployees_();
 }
 
 function health_() {
@@ -678,9 +704,10 @@ function adminSaveFace_(req) {
 
 function adminResetFace_(req) {
   authAdmin_(req.token);
+  forgetEmployees_();
   const e = findEmployee_(req.id);
   if (!e) throw new Error('Employee not found.');
-  EMPLOYEES_MEMO = null;
+  forgetEmployees_();
   const sh = sheet_(SH.EMP);
   const col = headerMap_(sh);
   if (col.FaceData !== undefined) sh.getRange(e.row, col.FaceData + 1).setValue('');
@@ -811,7 +838,11 @@ function headerMap_(sh) {
 let EMPLOYEES_MEMO = null;
 
 function employees_() {
-  if (!EMPLOYEES_MEMO) EMPLOYEES_MEMO = readEmployees_();
+  if (!EMPLOYEES_MEMO) EMPLOYEES_MEMO = cacheGet_('emp_v1');
+  if (!EMPLOYEES_MEMO) {
+    EMPLOYEES_MEMO = readEmployees_();
+    cachePut_('emp_v1', EMPLOYEES_MEMO);
+  }
   return EMPLOYEES_MEMO.map(function (e) { return Object.assign({}, e); });
 }
 
@@ -921,6 +952,8 @@ function locations_() {
 }
 
 function holidays_() {
+  const cached = cacheGet_('hol_v1');
+  if (cached) return cached;
   const sh = SpreadsheetApp.getActive().getSheetByName(SH.HOL);
   const out = {};
   if (!sh) return out;
@@ -928,6 +961,7 @@ function holidays_() {
     const d = dstr_(r[0]);
     if (d) out[d] = String(r[1] || 'Holiday');
   });
+  cachePut_('hol_v1', out);
   return out;
 }
 
@@ -935,6 +969,8 @@ let SETTINGS_MEMO = null;
 
 function settings_() {
   if (SETTINGS_MEMO) return SETTINGS_MEMO;
+  const cached = cacheGet_('set_v1');
+  if (cached) { SETTINGS_MEMO = cached; return cached; }
   const sh = SpreadsheetApp.getActive().getSheetByName(SH.SET);
   const out = {};
   if (!sh) return out;
@@ -942,11 +978,13 @@ function settings_() {
   sh.getDataRange().getValues().slice(1).forEach(function (r) {
     if (String(r[0]).trim()) out[String(r[0]).trim()] = String(r[1]).trim();
   });
+  cachePut_('set_v1', out);
   return out;
 }
 
 function setSetting_(key, value) {
   SETTINGS_MEMO = null;
+  try { CacheService.getScriptCache().remove('set_v1'); } catch (e) { }
   const sh = sheet_(SH.SET);
   const v = sh.getDataRange().getValues();
   for (let i = 1; i < v.length; i++) {
