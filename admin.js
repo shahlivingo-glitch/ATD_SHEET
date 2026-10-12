@@ -161,6 +161,7 @@ function renderDay() {
         : 'Outside ' + x.outsideCount + '× · ' + dur(x.outsideMin) + (x.outsideLunchMin ? ' (' + dur(x.outsideLunchMin) + ' in lunch hour)' : '');
       meta.push('<button class="pill ' + (x.outsideNow ? 'bad' : 'warn') + '" data-outside="' + esc(x.id) + '" style="border:0;cursor:pointer">' + esc(txt) + '</button>');
     }
+    if (x.halfDayOff) meta.push('<span class="pill info">Half-day off</span>');
     if (x.short) meta.push('<span class="pill bad">Worked under ' + ((A.settings && A.settings.minHalfDay) || 3) + 'h</span>');
     if (x.late) meta.push('<span class="pill warn">Late ' + dur(x.late) + '</span>');
     if (x.early) meta.push('<span class="pill warn">Left ' + dur(x.early) + ' early</span>');
@@ -354,7 +355,8 @@ function renderEmployees() {
     return '<tr><td>' + esc(e.id) + '</td><td>' + esc(e.name) +
       (e.canPunch ? ' <span class="pill info" title="Can take selfies for other employees">Shared phone</span>' : '') +
       '</td><td>' + esc(e.dept) + '</td><td>' + fmtHM(e.shiftStart) + ' - ' + fmtHM(e.shiftEnd) +
-      '</td><td class="num">' + e.lunch + 'm</td><td class="num">' + e.grace + 'm</td><td>' + esc(e.weeklyOff) + '</td><td class="num">' + esc(e.pin) + '</td><td>' +
+      '</td><td class="num">' + e.lunch + 'm</td><td class="num">' + e.grace + 'm</td><td>' + esc(e.weeklyOff) +
+      (e.halfDayOff ? ' <span class="pill info">½ ' + esc(e.halfDayOff) + '</span>' : '') + '</td><td class="num">' + esc(e.pin) + '</td><td>' +
       (e.hasFace ? '<span class="pill ok" title="' + esc(e.faceReg) + '">Registered</span>' : '<span class="pill mute">Not yet</span>') +
       '</td><td>' + (e.active ? '<span class="pill ok">Active</span>' : '<span class="pill mute">Inactive</span>') +
       '</td><td><button class="btn sm ghost" data-edit="' + esc(e.id) + '">Edit</button></td></tr>';
@@ -399,6 +401,7 @@ function openEmp(e) {
   const off = String(e.weeklyOff).toLowerCase();
   document.querySelectorAll('#f-off input').forEach(function (c) { c.checked = off.indexOf(c.value.toLowerCase()) >= 0; });
   $('#f-active').checked = e.active;
+  $('#f-halfoff').value = e.halfDayOff || '';
   $('#f-others').checked = !!e.canPunch;
   A.editing = isNew ? null : e.id;
   renderFaceRow();
@@ -420,7 +423,7 @@ $('#emp-form').addEventListener('submit', async function (ev) {
       shiftStart: $('#f-start').value, shiftEnd: $('#f-end').value, lunch: $('#f-lunch').value, grace: $('#f-grace').value, joinDate: $('#f-join').value, lunchStart: $('#f-lunchstart').value,
       weeklyOff: Array.prototype.filter.call(document.querySelectorAll('#f-off input'), function (c) { return c.checked; })
         .map(function (c) { return c.value; }).join(', '),
-      active: $('#f-active').checked, canPunchOthers: $('#f-others').checked,
+      active: $('#f-active').checked, canPunchOthers: $('#f-others').checked, halfDayOff: $('#f-halfoff').value,
     } });
     A.employees = r.employees;
     A.locations = r.locations;

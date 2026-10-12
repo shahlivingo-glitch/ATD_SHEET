@@ -123,12 +123,14 @@ function renderHome() {
   const chips = ['<span class="pill info">Shift ' + esc(fmtHM(p.shiftStart)) + ' - ' + esc(fmtHM(p.shiftEnd)) + '</span>'];
   if (p.lunch) chips.push('<span class="pill mute">Lunch ' + p.lunch + ' min' + (d.lunchMode === 'AUTO' ? ' (auto)' : '') + '</span>');
   if (p.weeklyOff) chips.push('<span class="pill mute">Off: ' + esc(p.weeklyOff) + '</span>');
+  if (p.halfDayOff) chips.push('<span class="pill mute">Half day: ' + esc(p.halfDayOff) + '</span>');
   $('#shift-row').innerHTML = chips.join('');
 
   const s = d.summary;
   const notes = [];
   if (s.holiday) notes.push('<div class="notice ok">Today is a holiday: ' + esc(s.holiday) + '</div>');
   else if (s.offDay) notes.push('<div class="notice ok">Today is your weekly off.</div>');
+  else if (s.halfDayOff) notes.push('<div class="notice ok">Today is your half day: half a day of work counts as a full day.</div>');
   if (s.late) notes.push('<div class="notice warn">You checked in ' + dur(s.late) + ' late.</div>');
   if (s.status === 'On Lunch' && s.lunchOver) notes.push('<div class="notice warn">Lunch is ' + dur(s.lunchOver) + ' over your ' + p.lunch + ' min.</div>');
   $('#notice').innerHTML = notes.join('');

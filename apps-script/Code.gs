@@ -1,9 +1,9 @@
-const VERSION = '2026-10-11.12';
+const VERSION = '2026-10-12.1';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
-  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered', 'LunchStart'];
+  'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered', 'LunchStart', 'HalfDayOff'];
 const PUNCH_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Action', 'Latitude', 'Longitude',
   'AccuracyM', 'Address', 'Location', 'InsideFence', 'DistanceM', 'PhotoURL', 'PhotoID',
   'ThumbID', 'DeviceTime', 'Device', 'PunchedBy', 'FaceMatch', 'PunchID'];
@@ -102,7 +102,7 @@ function onOpen() {
 
 function ensureSchema_() {
   const cache = CacheService.getScriptCache();
-  if (cache.get('schema') === '7') return;
+  if (cache.get('schema') === '8') return;
   const ss = SpreadsheetApp.getActive();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
@@ -115,7 +115,7 @@ function ensureSchema_() {
       }
     });
   });
-  cache.put('schema', '7', 21600);
+  cache.put('schema', '8', 21600);
   if (!ss.getSheetByName(SH.OUT)) ensureSheet_(ss, SH.OUT, OUT_COLS, ['ID', 'WorkDate', 'EmpID']);
   if (!ss.getSheetByName(SH.ALERT)) ensureSheet_(ss, SH.ALERT, ALERT_COLS, ['WorkDate', 'EmpID']);
 }
@@ -336,7 +336,7 @@ function punch_(req) {
 }
 
 /** Lunch window and work locations, so the Android app can remind and check the range on the phone. */
-function reminderInfo_(e) {
+function reminderInfo_(e, workDate) {
   const s = settings_();
   let locs = locations_();
   const allowed = String(e.locations || '').toLowerCase().split(',').map(function (x) { return x.trim(); }).filter(String);
@@ -345,7 +345,8 @@ function reminderInfo_(e) {
     lunchStart: e.lunchStart || defaultLunchStart_(),
     lunchMinutes: num_(e.lunch, 0),
     awayMinutes: Math.max(1, num_(s.AWAY_MINUTES, 15)),
-    shiftEnd: e.shiftEnd,
+    shiftEnd: workDate && isHalfDayOff_(e, workDate) && !isWeeklyOff_(e, workDate) && !holidays_()[workDate]
+      ? halfShiftEnd_(e) : e.shiftEnd,
     autoLunch: autoLunch_(),
     fences: locs.map(function (l) { return { name: l.name, lat: l.lat, lng: l.lng, radius: l.radius }; }),
   };
@@ -537,14 +538,14 @@ function statusFor_(e, given) {
     serverTime: now.getTime(),
     profile: {
       id: e.id, name: e.name, dept: e.dept, shiftStart: e.shiftStart, shiftEnd: e.shiftEnd,
-      lunch: e.lunch, grace: e.grace, weeklyOff: e.weeklyOff, canPunchOthers: e.canPunch,
+      lunch: e.lunch, grace: e.grace, weeklyOff: e.weeklyOff, halfDayOff: e.halfDayOff, canPunchOthers: e.canPunch,
       hasFace: !!e.faceData,
     },
     lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE',
     faceMode: faceMode_(),
     verify: { IN: verifyFor_('IN'), OUT: verifyFor_('OUT'), LUNCH_OUT: verifyFor_('LUNCH_OUT'), LUNCH_IN: verifyFor_('LUNCH_IN') },
     faceStrict: faceStrict_(),
-    reminders: reminderInfo_(e),
+    reminders: reminderInfo_(e, st.workDate),
     workDate: st.workDate,
     punches: st.punches.map(publicPunch_),
     next: st.next,
@@ -640,6 +641,10 @@ function adminSaveEmployee_(req) {
   const lunch = Math.round(num_(x.lunch, 0)), grace = Math.round(num_(x.grace, 0));
   if (lunch < 0 || lunch > 300 || grace < 0 || grace > 180) throw new Error('Check the lunch / grace minutes.');
 
+  const halfOff = dayName_(x.halfDayOff);
+  if (halfOff && String(x.weeklyOff || '').toLowerCase().indexOf(halfOff.toLowerCase()) >= 0) {
+    throw new Error('The half-day off cannot be the same day as a weekly off.');
+  }
   const join = x.joinDate ? dateParam_(x.joinDate) : '';
   if (x.joinDate && !join) throw new Error('Joining date is invalid.');
 
@@ -655,6 +660,7 @@ function adminSaveEmployee_(req) {
       EmpID: txt_(existing ? existing.id : id), Name: txt_(name), PIN: txt_(pin), Phone: txt_(String(x.phone || '').trim()),
       Department: txt_(String(x.dept || '').trim()), ShiftStart: txt_(ss), ShiftEnd: txt_(se), LunchMinutes: lunch,
       LunchStart: txt_(hhmm_(x.lunchStart) || ''),
+      HalfDayOff: txt_(halfOff),
       GraceMinutes: grace, WeeklyOff: txt_(String(x.weeklyOff || '').trim()),
       AllowedLocations: txt_(String(x.locations || '').trim()), Active: x.active === false ? 'No' : 'Yes',
       CanPunchOthers: x.canPunchOthers ? 'Yes' : 'No',
@@ -977,7 +983,10 @@ function workDate_(e, t) {
 function summarize_(e, date, list, now, hol) {
   const sh = shift_(e);
   const schedStart = dateAt_(date, sh.start);
-  const schedEnd = new Date(schedStart.getTime() + sh.len * 60000);
+  const halfOff = !hol[date] && !isWeeklyOff_(e, date) && isHalfDayOff_(e, date);
+  // half-day off: the day's shift is the first half, and half a day of work counts as a full day
+  const dayLen = halfOff ? Math.round(sh.len / 2) : sh.len;
+  const schedEnd = new Date(schedStart.getTime() + dayLen * 60000);
   const current = workDate_(e, now) === date;
   const holiday = hol[date] || '';
   const off = !!holiday || isWeeklyOff_(e, date);
@@ -1001,7 +1010,8 @@ function summarize_(e, date, list, now, hol) {
     autoLunch = true;
   }
   const workedMin = first && endT ? Math.max(0, Math.round((endT - first.ts - breakMs) / 60000)) : 0;
-  const expected = Math.max(0, sh.len - num_(e.lunch, 0));
+  const fullExpected = Math.max(0, sh.len - num_(e.lunch, 0));
+  const expected = halfOff ? Math.round(fullExpected / 2) : fullExpected;
   const lateMin = first ? Math.max(0, Math.round((first.ts - schedStart) / 60000)) : 0;
   const late = first && !off && lateMin > num_(e.grace, 0) ? lateMin : 0;
   const early = lastOut && !off ? Math.max(0, Math.round((schedEnd - lastOut.ts) / 60000)) : 0;
@@ -1018,13 +1028,14 @@ function summarize_(e, date, list, now, hol) {
     status = current ? (onBreak ? 'On Lunch' : 'Working') : 'No Check-out';
   } else {
     const minHalf = num_(settings_().MIN_HALF_DAY_HOURS, 3) * 60;
-    if (off || workedMin >= expected / 2) status = 'Present';
-    else if (workedMin >= minHalf) status = 'Half Day';
+    const fullAt = halfOff ? Math.min(minHalf, expected) : expected / 2;
+    if (off || workedMin >= fullAt) status = 'Present';
+    else if (!halfOff && workedMin >= minHalf) status = 'Half Day';
     else { status = 'Absent'; short = true; } // checked in and out, but worked less than the half-day minimum
   }
 
   return {
-    date: date, status: status, offDay: off, holiday: holiday,
+    date: date, status: status, offDay: off, holiday: holiday, halfDayOff: halfOff,
     shift: e.shiftStart + '-' + e.shiftEnd,
     in: first ? first.ts.getTime() : null,
     out: lastOut ? lastOut.ts.getTime() : null,
@@ -1033,6 +1044,25 @@ function summarize_(e, date, list, now, hol) {
     workedMin: workedMin, expectedMin: expected, late: late, early: early,
     breakMin: breakMin, lunchOver: Math.max(0, breakMin - num_(e.lunch, 0)), ot: ot, autoLunch: autoLunch, short: short,
   };
+}
+
+/** 'Mon'..'Sun' from any spelling ('saturday', 'SAT'), or '' */
+function dayName_(v) {
+  const d = String(v || '').trim().slice(0, 3).toLowerCase();
+  const all = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+  for (let i = 0; i < all.length; i++) if (all[i].toLowerCase() === d) return all[i];
+  return '';
+}
+
+function isHalfDayOff_(e, date) {
+  return !!e.halfDayOff && fmt_(dateAt_(date, 720), 'EEE').toLowerCase() === e.halfDayOff.toLowerCase();
+}
+
+/** Middle of the shift as HH:mm (end of work on the half-day off). */
+function halfShiftEnd_(e) {
+  const sh = shift_(e);
+  const m = (sh.start + Math.round(sh.len / 2)) % 1440;
+  return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2);
 }
 
 function isWeeklyOff_(e, date) {
@@ -1120,6 +1150,7 @@ function readEmployees_() {
       faceData: parseFace_(g(r, 'FaceData')),
       faceReg: String(g(r, 'FaceRegistered')).trim(),
       lunchStart: hhmm_(g(r, 'LunchStart')),
+      halfDayOff: dayName_(g(r, 'HalfDayOff')),
     });
   }
   return out;

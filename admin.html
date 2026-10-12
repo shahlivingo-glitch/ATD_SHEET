@@ -11,7 +11,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance Admin</title>
-<link rel="stylesheet" href="app.css?v=28">
+<link rel="stylesheet" href="app.css?v=29">
 </head>
 <body>
 
@@ -189,6 +189,13 @@
       <label>Weekly off</label>
       <div class="days" id="f-off"></div>
     </div>
+    <div>
+      <label for="f-halfoff">Half-day off (one day a week: half a day of work counts as a full day)</label>
+      <select id="f-halfoff">
+        <option value="">None</option>
+        <option>Mon</option><option>Tue</option><option>Wed</option><option>Thu</option><option>Fri</option><option>Sat</option><option>Sun</option>
+      </select>
+    </div>
     <label class="switch"><input type="checkbox" id="f-active" checked> Active (can punch)</label>
     <label class="switch"><input type="checkbox" id="f-others"> Can take selfie for other employees (shared phone &amp; group selfie)</label>
     <div id="f-push-row" class="hidden" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
@@ -238,8 +245,8 @@
   </div>
 </div>
 
-<script src="config.js?v=28"></script>
-<script src="common.js?v=28"></script>
-<script src="admin.js?v=28"></script>
+<script src="config.js?v=29"></script>
+<script src="common.js?v=29"></script>
+<script src="admin.js?v=29"></script>
 </body>
 </html>

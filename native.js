@@ -45,7 +45,7 @@
 
   function shiftEndTime(d) {
     const p = d.profile;
-    let end = at(d.workDate, p.shiftEnd, 0);
+    let end = at(d.workDate, (d.reminders && d.reminders.shiftEnd) || p.shiftEnd, 0);
     if (end !== null && at(d.workDate, p.shiftStart, 0) >= end) end += 864e5; // night shift ends the next day
     return end;
   }
