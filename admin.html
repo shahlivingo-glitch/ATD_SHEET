@@ -11,7 +11,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance Admin</title>
-<link rel="stylesheet" href="app.css?v=26">
+<link rel="stylesheet" href="app.css?v=27">
 </head>
 <body>
 
@@ -105,6 +105,7 @@
         </table>
       </div>
       <form id="loc-form" class="stack">
+        <p class="small hidden" id="loc-editing" style="margin:0"></p>
         <div class="grid2">
           <div><label for="loc-name">Name</label><input id="loc-name" type="text" placeholder="Head Office" required></div>
           <div><label for="loc-radius">Radius (metres)</label><input id="loc-radius" type="number" value="100" min="10" required></div>
@@ -113,7 +114,8 @@
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           <button type="button" class="btn ghost" id="loc-here">Use my current location</button>
-          <button type="submit" class="btn">Save location</button>
+          <button type="submit" class="btn" id="loc-save">Save location</button>
+          <button type="button" class="btn ghost hidden" id="loc-cancel">Cancel edit</button>
         </div>
       </form>
     </div>
@@ -236,8 +238,8 @@
   </div>
 </div>
 
-<script src="config.js?v=26"></script>
-<script src="common.js?v=26"></script>
-<script src="admin.js?v=26"></script>
+<script src="config.js?v=27"></script>
+<script src="common.js?v=27"></script>
+<script src="admin.js?v=27"></script>
 </body>
 </html>

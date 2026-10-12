@@ -436,11 +436,34 @@ function renderLocations() {
   $('#loc-rows').innerHTML = A.locations.length ? A.locations.map(function (l) {
     return '<tr><td>' + esc(l.name) + '</td><td><a href="https://www.google.com/maps?q=' + l.lat + ',' + l.lng + '" target="_blank" rel="noopener">' +
       l.lat.toFixed(5) + ', ' + l.lng.toFixed(5) + '</a></td><td class="num">' + l.radius + ' m</td>' +
-      '<td><button class="btn sm ghost" data-del="' + esc(l.name) + '">Delete</button></td></tr>';
+      '<td style="white-space:nowrap"><button class="btn sm ghost" data-edit-loc="' + esc(l.name) + '">Edit</button> ' +
+      '<button class="btn sm ghost" data-del="' + esc(l.name) + '">Delete</button></td></tr>';
   }).join('') : '<tr><td colspan="4" class="muted">No locations yet. Punches are still recorded with GPS and address.</td></tr>';
 }
 
+/** Fills the form with a location so it can be changed (or reset to the normal "add" form). */
+function editLocation(l) {
+  A.locEditing = l ? l.name : null;
+  $('#loc-name').value = l ? l.name : '';
+  $('#loc-lat').value = l ? l.lat : '';
+  $('#loc-lng').value = l ? l.lng : '';
+  $('#loc-radius').value = l ? l.radius : 100;
+  $('#loc-save').textContent = l ? 'Update location' : 'Save location';
+  $('#loc-cancel').classList.toggle('hidden', !l);
+  $('#loc-editing').classList.toggle('hidden', !l);
+  $('#loc-editing').innerHTML = l ? '<span class="pill warn">Editing</span> <b>' + esc(l.name) +
+    '</b> - change the values or tap <b>Use my current location</b>, then <b>Update location</b>.' : '';
+  if (l) { $('#loc-form').scrollIntoView({ behavior: 'smooth', block: 'center' }); $('#loc-radius').focus(); }
+}
+$('#loc-cancel').addEventListener('click', function () { editLocation(null); });
+
 $('#loc-rows').addEventListener('click', async function (ev) {
+  const eb = ev.target.closest('[data-edit-loc]');
+  if (eb) {
+    const l = A.locations.find(function (x) { return x.name === eb.dataset.editLoc; });
+    if (l) editLocation(l);
+    return;
+  }
   const b = ev.target.closest('[data-del]');
   if (!b || !confirm('Delete location "' + b.dataset.del + '"?')) return;
   try {
@@ -470,17 +493,25 @@ $('#loc-here').addEventListener('click', function () {
 
 $('#loc-form').addEventListener('submit', async function (ev) {
   ev.preventDefault();
+  const btn = $('#loc-save');
+  const was = A.locEditing, name = $('#loc-name').value.trim();
+  btn.disabled = true;
   try {
-    const r = await call('adminSaveLocation', { location: {
-      name: $('#loc-name').value, lat: $('#loc-lat').value, lng: $('#loc-lng').value, radius: $('#loc-radius').value,
+    let r = await call('adminSaveLocation', { location: {
+      name: name, lat: $('#loc-lat').value, lng: $('#loc-lng').value, radius: $('#loc-radius').value,
     } });
+    // renamed while editing: the new name was saved, so remove the old entry
+    if (was && was.toLowerCase() !== name.toLowerCase()) r = await call('adminDeleteLocation', { name: was });
     A.locations = r.locations;
     renderLocations();
     renderEmployees();
-    this.reset();
-    $('#loc-radius').value = 100;
-    toast('Location saved');
-  } catch (e) { toast(e.message, true); }
+    editLocation(null);
+    toast(was ? 'Location updated' : 'Location saved');
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 async function loadSettingsForm() {
