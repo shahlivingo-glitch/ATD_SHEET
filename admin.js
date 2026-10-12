@@ -145,8 +145,13 @@ function renderDay() {
       if (p && p.thumbId && !(p.thumbId in A.thumbs)) need.push(p.thumbId);
       const th = p && p.thumbId && A.thumbs[p.thumbId] ? ' style="background-image:url(' + A.thumbs[p.thumbId] + ')"' : '';
       const flag = p && p.inside === 'No' ? ' <span title="Outside location" style="color:var(--out)">!</span>' : '';
+      // no photo: green mark for a face-recognition punch, red OUT when the person is absent / not in yet
+      let mark = '', cls = 'th';
+      if (p && !p.photoId && p.photoPending) { cls += ' wait'; mark = 'Photo uploading'; }
+      else if (p && !p.photoId) { cls += ' face'; mark = type === 'IN' ? 'IN' : '&#10003;'; }
+      else if (!p && type === 'IN' && (x.status === 'Absent' || x.status === 'Not In Yet')) { cls += ' absent'; mark = 'OUT'; }
       return '<button class="p' + (p ? ' has' : '') + '"' + (p ? ' data-photo="' + esc(p.key) + '"' : '') + '>' +
-        '<div class="th" data-thumb="' + esc(p ? p.thumbId : '') + '"' + th + '></div>' +
+        '<div class="' + cls + '" data-thumb="' + esc(p ? p.thumbId : '') + '"' + th + '>' + mark + '</div>' +
         '<b>' + (p ? fmtTime(p.ts) : '--') + flag + '</b>' + LABELS[type] + '</button>';
     };
     const meta = [];

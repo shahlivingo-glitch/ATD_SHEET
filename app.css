@@ -238,7 +238,11 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px co
 .punch-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
 .punch-strip .p { background: var(--bg); border-radius: 10px; padding: 6px; text-align: center; font-size: 12px; cursor: default; border: 0; color: var(--ink); }
 .punch-strip .p.has { cursor: pointer; }
-.punch-strip .p .th { width: 100%; aspect-ratio: 3/4; border-radius: 6px; background: var(--line) center/cover no-repeat; margin-bottom: 4px; }
+.punch-strip .p .th { width: 100%; aspect-ratio: 3/4; border-radius: 6px; background: var(--line) center/cover no-repeat; margin-bottom: 4px;
+  display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 22px; letter-spacing: .04em; color: #fff; }
+.punch-strip .p .th.face { background: var(--in); }
+.punch-strip .p .th.absent { background: var(--out); }
+.punch-strip .p .th.wait { font-size: 11px; font-weight: 600; color: var(--muted); text-align: center; padding: 4px; letter-spacing: 0; }
 .punch-strip .p b { display: block; font-variant-numeric: tabular-nums; font-size: 13px; }
 .emp-card .meta { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 
