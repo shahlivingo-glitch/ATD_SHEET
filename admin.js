@@ -145,12 +145,15 @@ function renderDay() {
       if (p && p.thumbId && !(p.thumbId in A.thumbs)) need.push(p.thumbId);
       const th = p && p.thumbId && A.thumbs[p.thumbId] ? ' style="background-image:url(' + A.thumbs[p.thumbId] + ')"' : '';
       const flag = p && p.inside === 'No' ? ' <span title="Outside location" style="color:var(--out)">!</span>' : '';
-      // no photo: green mark for a face-recognition punch, red OUT when the person is absent / not in yet
+      // no photo: blue for a punch the admin added, green for a face-recognition punch,
+      // red OUT when the person is absent / not in yet; an empty slot opens "Add missed punch"
       let mark = '', cls = 'th';
       if (p && !p.photoId && p.photoPending) { cls += ' wait'; mark = 'Photo uploading'; }
+      else if (p && p.manual) { cls += ' manual'; mark = 'ADMIN'; }
       else if (p && !p.photoId) { cls += ' face'; mark = type === 'IN' ? 'IN' : '&#10003;'; }
       else if (!p && type === 'IN' && (x.status === 'Absent' || x.status === 'Not In Yet')) { cls += ' absent'; mark = 'OUT'; }
-      return '<button class="p' + (p ? ' has' : '') + '"' + (p ? ' data-photo="' + esc(p.key) + '"' : '') + '>' +
+      else if (!p) { cls += ' add'; mark = '+'; }
+      return '<button class="p has"' + (p ? ' data-photo="' + esc(p.key) + '"' : ' data-add="' + esc(x.id + '|' + type) + '" title="Add missed ' + LABELS[type] + '"') + '>' +
         '<div class="' + cls + '" data-thumb="' + esc(p ? p.thumbId : '') + '"' + th + '>' + mark + '</div>' +
         '<b>' + (p ? fmtTime(p.ts) : '--') + flag + '</b>' + LABELS[type] + '</button>';
     };
@@ -174,8 +177,11 @@ function renderDay() {
     });
     const badFace = ps.filter(function (p) { return /^NO MATCH|^No face|^Face check failed/.test(p.face || ''); }).length;
     if (badFace) meta.push('<span class="pill bad">Face mismatch ' + badFace + '</span>');
-    if (ps.some(function (p) { return p.by; })) meta.push('<span class="pill info">Punched on shared phone</span>');
+    if (ps.some(function (p) { return p.by && !p.manual; })) meta.push('<span class="pill info">Punched on shared phone</span>');
+    const manual = ps.filter(function (p) { return p.manual; }).length;
+    if (manual) meta.push('<span class="pill info">Added by admin ' + manual + '</span>');
     if (ps.length > 4) meta.push('<span class="pill mute">' + ps.length + ' punches</span>');
+    meta.push('<button class="pill mute" data-add="' + esc(x.id + '|') + '" style="border:0;cursor:pointer">+ Add punch</button>');
     return '<div class="emp-card"><div class="head"><div class="who"><b>' + esc(x.name) + '</b>' +
       '<span class="muted small">' + esc(x.id) + (x.dept ? ' · ' + esc(x.dept) : '') + ' · ' + esc(shiftText(x.shift)) + '</span></div>' +
       statusPill(x.status) + '</div>' +
@@ -227,6 +233,8 @@ function openOutside(empId) {
 $('#day-list').addEventListener('click', function (ev) {
   const ob = ev.target.closest('[data-outside]');
   if (ob) { openOutside(ob.dataset.outside); return; }
+  const ad = ev.target.closest('[data-add]');
+  if (ad) { const k = ad.dataset.add.split('|'); openManual(k[0], k[1]); return; }
   const b = ev.target.closest('[data-photo]');
   if (b) openPhoto(A.punchesById[b.dataset.photo]);
 });
@@ -240,6 +248,17 @@ async function openPhoto(p) {
   const img = $('#ph-img');
   img.removeAttribute('src');
   img.classList.toggle('hidden', !p.photoId);
+  if (p.manual) {
+    const why = manualReason(p);
+    $('#ph-info').innerHTML = '<div><span class="pill info">Added by admin, no selfie</span></div>' +
+      '<div><b>' + fmtDate(p.ts, true) + ', ' + fmtTime(p.ts) + '</b></div>' +
+      (why ? '<div>Reason: ' + esc(why) + '</div>' : '') +
+      (p.addedAt ? '<div class="muted small">Added on ' + esc(p.addedAt) + '</div>' : '') +
+      '<div><button type="button" class="btn sm ghost" id="ph-change">Change time or delete</button></div>';
+    $('#ph-change').addEventListener('click', function () { $('#photo-modal').classList.add('hidden'); openManual(p.empId, p.action, p); });
+    $('#photo-modal').classList.remove('hidden');
+    return;
+  }
   if (p.thumbId && A.thumbs[p.thumbId]) img.src = A.thumbs[p.thumbId];
   const map = 'https://www.google.com/maps?q=' + p.lat + ',' + p.lng;
   const fence = p.location
@@ -263,6 +282,93 @@ async function openPhoto(p) {
     img.src = r.photo;
   } catch (e) { toast('Could not load the photo: ' + e.message, true); }
 }
+
+/* ---------------- missed punch added by the admin ---------------- */
+
+function hm24(ms) {
+  return new Intl.DateTimeFormat('en-GB', { timeZone: TZ, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+}
+
+function manualReason(p) { return String(p.address || '').replace(/^Added by admin:?\s*/, ''); }
+
+/** Usual time for that punch, from the person's shift and lunch. */
+function usualTime(row, type) {
+  const sh = String(row.shift || '').split('-');
+  const ls = row.lunchStart || (A.settings && A.settings.lunchStart) || '';
+  if (type === 'IN') return sh[0] || '';
+  if (type === 'OUT') return sh[1] || '';
+  if (type === 'LUNCH_OUT') return ls;
+  if (!ls) return '';
+  const m = (+ls.split(':')[0] * 60 + +ls.split(':')[1] + (row.lunchMin || 0)) % 1440;
+  return ('0' + Math.floor(m / 60)).slice(-2) + ':' + ('0' + (m % 60)).slice(-2);
+}
+
+function openManual(empId, type, p) {
+  const r = A.day;
+  const row = r && r.rows.find(function (x) { return x.id === empId; });
+  if (!row) return;
+  if (!type) {
+    const ps = r.punches.filter(function (q) { return q.empId === empId; });
+    const last = ps.length ? ps[ps.length - 1].action : '';
+    type = { '': 'IN', IN: 'OUT', LUNCH_OUT: 'LUNCH_IN', LUNCH_IN: 'OUT', OUT: 'OUT' }[last] || 'IN';
+  }
+  A.manual = { empId: empId, date: r.date, id: p ? p.id : '', row: row };
+  $('#mp-title').textContent = p ? 'Change ' + LABELS[p.action] : 'Add missed punch';
+  $('#mp-who').innerHTML = '<b>' + esc(row.name) + '</b> <span class="muted">(' + esc(row.id) + ') · ' +
+    fmtDate(new Date(r.date + 'T12:00:00').getTime(), true) + ' · shift ' + esc(shiftText(row.shift)) + '</span>';
+  $('#mp-type').value = type;
+  $('#mp-type').disabled = !!p;
+  $('#mp-time').value = p ? hm24(p.ts) : usualTime(row, type);
+  $('#mp-reason').value = p ? manualReason(p) : '';
+  $('#mp-delete').classList.toggle('hidden', !p);
+  const sh = String(row.shift || '').split('-');
+  $('#mp-hint').textContent = 'Saved without a selfie and marked "Added by admin". ' +
+    (sh.length === 2 && sh[1] < sh[0] ? 'Night shift: a time after midnight is saved on the next morning.' : '');
+  $('#manual-modal').classList.remove('hidden');
+  $('#mp-time').focus();
+}
+
+$('#mp-type').addEventListener('change', function () {
+  if (A.manual && !A.manual.id) $('#mp-time').value = usualTime(A.manual.row, this.value);
+});
+
+$('#manual-form').addEventListener('submit', async function (ev) {
+  ev.preventDefault();
+  const m = A.manual;
+  if (!m) return;
+  const btn = this.querySelector('button[type=submit]');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+  try {
+    await call('adminSavePunch', { empId: m.empId, date: m.date, id: m.id, type: $('#mp-type').value,
+      time: $('#mp-time').value, reason: $('#mp-reason').value });
+    $('#manual-modal').classList.add('hidden');
+    toast(LABELS[$('#mp-type').value] + ' saved for ' + m.row.name);
+    await loadDay();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Save punch';
+  }
+});
+
+$('#mp-delete').addEventListener('click', async function () {
+  const m = A.manual;
+  if (!m || !m.id || !confirm('Delete this ' + LABELS[$('#mp-type').value] + ' for ' + m.row.name + '?')) return;
+  const btn = this;
+  btn.disabled = true;
+  try {
+    await call('adminDeletePunch', { id: m.id });
+    $('#manual-modal').classList.add('hidden');
+    toast('Punch deleted');
+    await loadDay();
+  } catch (e) {
+    toast(e.message, true);
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 /* ---------------- reports ---------------- */
 
@@ -292,20 +398,22 @@ function renderReport() {
     '<div class="table-wrap"><table><thead><tr><th>ID</th><th>Name</th><th>Shift</th><th class="num">Present</th><th class="num">Half day</th>' +
     '<th class="num">Absent</th><th class="num">Off</th><th class="num">Late days</th><th class="num">Late total</th><th class="num">Early leave</th>' +
     '<th class="num">Worked hrs</th><th class="num">OT hrs</th><th class="num">Lunch over</th><th class="num">No check-out</th>' +
-    '<th class="num">Times outside</th><th class="num">Outside</th></tr></thead><tbody>' +
+    '<th class="num">Times outside</th><th class="num">Outside</th><th class="num">Added by admin</th></tr></thead><tbody>' +
     r.totals.map(function (t) {
       return '<tr><td>' + esc(t.id) + '</td><td>' + esc(t.name) + '</td><td>' + esc(shiftText(t.shift)) + '</td><td class="num">' + t.present +
         '</td><td class="num">' + t.halfDay + '</td><td class="num">' + t.absent + '</td><td class="num">' + t.off + '</td><td class="num">' + t.late +
         '</td><td class="num">' + dur(t.lateMin) + '</td><td class="num">' + dur(t.earlyMin) + '</td><td class="num">' + hrs(t.workedMin) +
         '</td><td class="num">' + hrs(t.otMin) + '</td><td class="num">' + dur(t.lunchOverMin) + '</td><td class="num">' + t.missedOut +
-        '</td><td class="num">' + (t.outsideCount || 0) + '</td><td class="num">' + dur(t.outsideMin || 0) + '</td></tr>';
+        '</td><td class="num">' + (t.outsideCount || 0) + '</td><td class="num">' + dur(t.outsideMin || 0) +
+        '</td><td class="num">' + (t.manual || 0) + '</td></tr>';
     }).join('') + '</tbody></table></div>';
 
   html += '<h3 style="font-size:16px;margin:20px 0 8px">Day by day</h3>' +
     '<div class="table-wrap"><table><thead><tr><th>Date</th><th>ID</th><th>Name</th><th>Status</th><th>In</th><th>Lunch out</th><th>Lunch in</th><th>Out</th>' +
     '<th class="num">Worked</th><th class="num">Lunch</th><th class="num">Late</th><th class="num">Early</th><th class="num">OT</th><th class="num">Outside</th></tr></thead><tbody>' +
     r.days.map(function (d) {
-      return '<tr><td>' + esc(d.date) + '</td><td>' + esc(d.id) + '</td><td>' + esc(d.name) + '</td><td>' + statusPill(d.status) + '</td><td>' +
+      return '<tr><td>' + esc(d.date) + '</td><td>' + esc(d.id) + '</td><td>' + esc(d.name) + '</td><td>' + statusPill(d.status) +
+        (d.manual ? ' <span class="pill info" title="Punches added by the admin">Admin ' + d.manual + '</span>' : '') + '</td><td>' +
         (d.in ? fmtTime(d.in) : '') + '</td><td>' + (d.lunchOut ? fmtTime(d.lunchOut) : '') + '</td><td>' + (d.lunchIn ? fmtTime(d.lunchIn) : '') +
         '</td><td>' + (d.out ? fmtTime(d.out) : '') + '</td><td class="num">' + (d.in ? dur(d.workedMin) : '') + '</td><td class="num">' +
         (d.breakMin ? dur(d.breakMin) : '') + '</td><td class="num">' + (d.late ? dur(d.late) : '') + '</td><td class="num">' +
@@ -322,10 +430,10 @@ $('#rep-csv').addEventListener('click', function () {
   const t = function (ms) { return ms ? fmtTime(ms) : ''; };
   const lines = [['Date', 'Employee ID', 'Name', 'Department', 'Shift', 'Status', 'In', 'Lunch Out', 'Lunch In', 'Out',
     'Worked (min)', 'Lunch (min)', 'Late (min)', 'Early leave (min)', 'Overtime (min)', 'Lunch over (min)',
-    'Times outside', 'Outside (min)', 'Outside in lunch hour (min)'].join(',')];
+    'Times outside', 'Outside (min)', 'Outside in lunch hour (min)', 'Punches added by admin'].join(',')];
   r.days.forEach(function (d) {
     lines.push([d.date, d.id, d.name, d.dept, d.shift, d.status, t(d.in), t(d.lunchOut), t(d.lunchIn), t(d.out),
-      d.workedMin, d.breakMin, d.late, d.early, d.ot, d.lunchOver, d.outsideCount || 0, d.outsideMin || 0, d.outsideLunchMin || 0].map(q).join(','));
+      d.workedMin, d.breakMin, d.late, d.early, d.ot, d.lunchOver, d.outsideCount || 0, d.outsideMin || 0, d.outsideLunchMin || 0, d.manual || 0].map(q).join(','));
   });
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');

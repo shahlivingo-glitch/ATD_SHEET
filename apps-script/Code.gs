@@ -1,4 +1,4 @@
-const VERSION = '2026-10-12.1';
+const VERSION = '2026-10-13.1';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside' };
 
@@ -151,6 +151,8 @@ const ROUTES = {
   attachPhoto: attachPhoto_,
   adminLogin: adminLogin_,
   adminDay: adminDay_,
+  adminSavePunch: adminSavePunch_,
+  adminDeletePunch: adminDeletePunch_,
   reportAway: reportAway_,
   reportOutside: reportOutside_,
   adminTestPush: adminTestPush_,
@@ -317,7 +319,6 @@ function punch_(req) {
     });
     const sh = sheet_(SH.PUNCH);
     sh.getRange(sh.getLastRow() + 1, 1, rows.length, rows[0].length).setValues(rows);
-    // the reply is built from memory: no second read of the sheet
     targets.forEach(function (t, i) {
       recent.push({ ts: now, date: states[i].workDate, empId: t.id, name: t.name, action: type, lat: lat, lng: lng, acc: acc,
         address: address, location: fences[i].name || '', inside: fences[i].has ? (fences[i].inside ? 'Yes' : 'No') : '',
@@ -335,7 +336,6 @@ function punch_(req) {
   return res;
 }
 
-/** Lunch window and work locations, so the Android app can remind and check the range on the phone. */
 function reminderInfo_(e, workDate) {
   const s = settings_();
   let locs = locations_();
@@ -352,8 +352,6 @@ function reminderInfo_(e, workDate) {
   };
 }
 
-/** The Android app reports someone outside the work location in lunch hour without Lunch Out. */
-/** Sheets made before this setting existed have no LUNCH_START row: use 1:00 PM until the admin sets one. */
 function defaultLunchStart_() {
   const v = settings_().LUNCH_START;
   return v === undefined ? '13:00' : (hhmm_(v) || '');
@@ -376,10 +374,6 @@ function reportAway_(req) {
   return { logged: true };
 }
 
-/**
- * The Android app reports each trip outside the work location while working:
- * first when it starts (End empty = still outside), then again when the person is back.
- */
 function reportOutside_(req) {
   const e = authEmp_(req.token);
   const id = String(req.id || '');
@@ -416,7 +410,6 @@ function reportOutside_(req) {
   return { saved: true };
 }
 
-/** Trips outside for a date range; a trip without an end is still going on. */
 function outsideFor_(from, to) {
   const sh = SpreadsheetApp.getActive().getSheetByName(SH.OUT);
   if (!sh || sh.getLastRow() < 2) return [];
@@ -446,9 +439,6 @@ function alertsFor_(date) {
   });
 }
 
-/* ---------- admin test notification ---------- */
-
-/** Queued for the employee; the Android app shows it with sound on its next refresh (app open or reopened). */
 function adminTestPush_(req) {
   authAdmin_(req.token);
   const e = findEmployee_(req.id);
@@ -458,7 +448,6 @@ function adminTestPush_(req) {
   return { queued: true };
 }
 
-/** Hands a queued notice to the Android app once. */
 function takeNotice_(e) {
   const cache = CacheService.getScriptCache();
   const key = 'note:' + e.id.toUpperCase();
@@ -468,7 +457,6 @@ function takeNotice_(e) {
   try { return JSON.parse(v); } catch (err) { return null; }
 }
 
-/** The selfie of a punch, sent right after the punch itself so the person isn't kept waiting. */
 function attachPhoto_(req) {
   const me = authEmp_(req.token);
   const id = String(req.punchId || '');
@@ -497,7 +485,6 @@ function attachPhoto_(req) {
   if (!mine) throw new Error('Not your punch');
   if (String(found[0].r[c.PhotoID] || '')) return { photoId: String(found[0].r[c.PhotoID]) };
 
-  // one upload at a time per punch (a retry may arrive while the first is still saving)
   const cache = CacheService.getScriptCache();
   if (cache.get('attach:' + id)) return { busy: true };
   cache.put('attach:' + id, '1', 120);
@@ -604,6 +591,97 @@ function adminDay_(req) {
   const punches = punchesSince_(date, function (p) { return p.date === date; }).map(publicPunch_);
   return { date: date, rows: rep.days, punches: punches, alerts: alertsFor_(date), outside: outsideFor_(date, date),
     settings: publicSettings_(), serverTime: Date.now() };
+}
+
+function adminSavePunch_(req) {
+  authAdmin_(req.token);
+  const e = findEmployee_(req.empId || '');
+  if (!e) throw new Error('Employee not found.');
+  const type = String(req.type || '');
+  if (!LABEL[type]) throw new Error('Choose Check In, Lunch Out, Lunch In or Check Out.');
+  const date = dateParam_(req.date);
+  if (!date) throw new Error('Choose the date.');
+  const hm = hhmm_(req.time);
+  if (!hm) throw new Error('Enter the time.');
+  if (e.joinDate && date < e.joinDate) throw new Error(e.name + ' joined on ' + e.joinDate + '.');
+  const t = manualTime_(e, date, hm);
+  const now = new Date();
+  if (t.getTime() > now.getTime() + 60000) throw new Error('That time has not come yet.');
+  const reason = String(req.reason || '').replace(/\s+/g, ' ').trim().slice(0, 100);
+  const id = String(req.id || '');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    let list = punchesSince_(date, function (p) { return p.empId === e.id && p.date === date; });
+    if (id) {
+      const old = list.filter(function (p) { return p.id === id; })[0];
+      if (!old || !old.manual) throw new Error('Only punches added by the admin can be changed.');
+      list = list.filter(function (p) { return p !== old; });
+    }
+    checkOrder_(list.concat([{ ts: t, action: type }]));
+    const sh = sheet_(SH.PUNCH);
+    const c = headerMap_(sh);
+    const row = [t, txt_(date), txt_(e.id), txt_(e.name), LABEL[type], '', '', '', txt_('Added by admin' + (reason ? ': ' + reason : '')),
+      '', '', '', '', '', '', txt_(fmt_(now, 'yyyy-MM-dd HH:mm:ss')), txt_('Admin dashboard'), txt_('Admin'), '', id || Utilities.getUuid()];
+    const at = id ? findPunchRow_(sh, c, id) : sh.getLastRow() + 1;
+    if (!at) throw new Error('Punch not found. Refresh and try again.');
+    sh.getRange(at, 1, 1, row.length).setValues([row]);
+  } finally {
+    lock.releaseLock();
+  }
+  return { saved: { empId: e.id, date: date, type: type, ts: t.getTime() } };
+}
+
+function adminDeletePunch_(req) {
+  authAdmin_(req.token);
+  const id = String(req.id || '');
+  if (!id) throw new Error('Punch not found.');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    const sh = sheet_(SH.PUNCH);
+    const c = headerMap_(sh);
+    const at = findPunchRow_(sh, c, id);
+    if (!at) throw new Error('Punch not found. Refresh and try again.');
+    const r = sh.getRange(at, 1, 1, sh.getLastColumn()).getValues()[0];
+    if (String(r[c.PunchedBy]).trim() !== 'Admin') throw new Error('Only punches added by the admin can be deleted.');
+    const date = dstr_(r[c.WorkDate]), empId = String(r[c.EmpID]).trim();
+    checkOrder_(punchesSince_(date, function (p) { return p.empId === empId && p.date === date && p.id !== id; }));
+    sh.deleteRow(at);
+  } finally {
+    lock.releaseLock();
+  }
+  return { deleted: id };
+}
+
+function manualTime_(e, date, hm) {
+  const ws = shift_(e).windowStart;
+  let m = toMin_(hm);
+  while (m < ws) m += 1440;
+  while (m >= ws + 1440) m -= 1440;
+  const t = dateAt_(date, m);
+  if (workDate_(e, t) !== date) throw new Error('That time does not fit this shift.');
+  return t;
+}
+
+function checkOrder_(list) {
+  list = list.slice().sort(function (a, b) { return a.ts - b.ts; });
+  let prev = '';
+  list.forEach(function (p) {
+    if ((NEXT[prev] || []).indexOf(p.action) < 0) {
+      throw new Error('Not possible. The day would read: ' + list.map(function (q) { return LABEL[q.action] + ' ' + fmt_(q.ts, 'HH:mm'); }).join(', ') +
+        '. The order must be Check In, Lunch Out, Lunch In, Check Out.');
+    }
+    prev = p.action;
+  });
+}
+
+function findPunchRow_(sh, c, id) {
+  const last = sh.getLastRow();
+  if (last < 2 || c.PunchID === undefined) return 0;
+  const v = sh.getRange(2, c.PunchID + 1, last - 1, 1).getValues();
+  for (let i = v.length - 1; i >= 0; i--) if (String(v[i][0]) === id) return i + 2;
+  return 0;
 }
 
 function adminReport_(req) {
@@ -785,16 +863,18 @@ function buildReport_(from, to, empId) {
   emps.forEach(function (e) {
     const t = { id: e.id, name: e.name, dept: e.dept, shift: e.shiftStart + '-' + e.shiftEnd, present: 0, halfDay: 0,
       absent: 0, late: 0, lateMin: 0, earlyMin: 0, workedMin: 0, otMin: 0, lunchOverMin: 0, off: 0, missedOut: 0,
-      outsideCount: 0, outsideMin: 0 };
+      outsideCount: 0, outsideMin: 0, manual: 0 };
     dates.forEach(function (d) {
       if (e.joinDate && d < e.joinDate) return;
       const s = summarize_(e, d, byKey[e.id + '|' + d] || [], now, hol);
       s.id = e.id; s.name = e.name; s.dept = e.dept;
+      s.manual = (byKey[e.id + '|' + d] || []).filter(function (p) { return p.manual; }).length;
+      s.lunchStart = e.lunchStart || defaultLunchStart_(); s.lunchMin = num_(e.lunch, 0);
+      t.manual += s.manual;
       const outs = outByKey[e.id.toUpperCase() + '|' + d] || [];
       s.outsideCount = outs.length;
       s.outsideMin = outs.reduce(function (a, o) { return a + o.minutes; }, 0);
       s.outsideNow = outs.some(function (o) { return !o.end; });
-      // minutes of those trips inside this person's lunch hour (forgot to punch Lunch Out?)
       const ls = e.lunchStart || defaultLunchStart_();
       if (ls && outs.length) {
         const lw = dateAt_(d, toMin_(ls)).getTime(), le = lw + num_(e.lunch, 0) * 60000;
@@ -984,7 +1064,6 @@ function summarize_(e, date, list, now, hol) {
   const sh = shift_(e);
   const schedStart = dateAt_(date, sh.start);
   const halfOff = !hol[date] && !isWeeklyOff_(e, date) && isHalfDayOff_(e, date);
-  // half-day off: the day's shift is the first half, and half a day of work counts as a full day
   const dayLen = halfOff ? Math.round(sh.len / 2) : sh.len;
   const schedEnd = new Date(schedStart.getTime() + dayLen * 60000);
   const current = workDate_(e, now) === date;
@@ -1031,7 +1110,7 @@ function summarize_(e, date, list, now, hol) {
     const fullAt = halfOff ? Math.min(minHalf, expected) : expected / 2;
     if (off || workedMin >= fullAt) status = 'Present';
     else if (!halfOff && workedMin >= minHalf) status = 'Half Day';
-    else { status = 'Absent'; short = true; } // checked in and out, but worked less than the half-day minimum
+    else { status = 'Absent'; short = true; }
   }
 
   return {
@@ -1046,7 +1125,6 @@ function summarize_(e, date, list, now, hol) {
   };
 }
 
-/** 'Mon'..'Sun' from any spelling ('saturday', 'SAT'), or '' */
 function dayName_(v) {
   const d = String(v || '').trim().slice(0, 3).toLowerCase();
   const all = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -1058,7 +1136,6 @@ function isHalfDayOff_(e, date) {
   return !!e.halfDayOff && fmt_(dateAt_(date, 720), 'EEE').toLowerCase() === e.halfDayOff.toLowerCase();
 }
 
-/** Middle of the shift as HH:mm (end of work on the half-day off). */
 function halfShiftEnd_(e) {
   const sh = shift_(e);
   const m = (sh.start + Math.round(sh.len / 2)) % 1440;
@@ -1176,7 +1253,9 @@ function punchesSince_(from, keep) {
     end = start - 1;
     chunk *= 2;
     let earliest = '';
-    for (let i = 0; i < v.length && !earliest; i++) earliest = dstr_(v[i][c.WorkDate]);
+    for (let i = 0; i < v.length && !earliest; i++) {
+      if (c.PunchedBy === undefined || String(v[i][c.PunchedBy]).trim() !== 'Admin') earliest = dstr_(v[i][c.WorkDate]);
+    }
     if (earliest && earliest < stop) break;
   }
   return rowsToPunches_(rows, c, function (q) { return q.date >= from && keep(q); });
@@ -1202,8 +1281,9 @@ function rowsToPunches_(v, c, keep) {
       acc: g(r, 'AccuracyM'), address: String(g(r, 'Address')), location: String(g(r, 'Location')),
       inside: String(g(r, 'InsideFence')), distance: g(r, 'DistanceM'), photoId: String(g(r, 'PhotoID')),
       thumbId: String(g(r, 'ThumbID')), by: String(g(r, 'PunchedBy')), face: String(g(r, 'FaceMatch')),
-      photoUrl: String(g(r, 'PhotoURL')),
+      photoUrl: String(g(r, 'PhotoURL')), id: String(g(r, 'PunchID')), devTime: String(g(r, 'DeviceTime')),
     };
+    p.manual = p.by.trim() === 'Admin';
     if (keep(p)) out.push(p);
   });
   out.sort(function (a, b) { return a.ts - b.ts; });
@@ -1215,7 +1295,7 @@ function publicPunch_(p) {
     ts: p.ts.getTime(), date: p.date, empId: p.empId, name: p.name, action: p.action, label: LABEL[p.action] || p.action,
     lat: p.lat, lng: p.lng, acc: p.acc, address: p.address, location: p.location, inside: p.inside,
     distance: p.distance, photoId: p.photoId, thumbId: p.thumbId, by: p.by, face: p.face,
-    photoPending: p.photoUrl === 'pending' && !p.photoId,
+    photoPending: p.photoUrl === 'pending' && !p.photoId, id: p.id, manual: p.manual, addedAt: p.manual ? p.devTime : '',
   };
 }
 

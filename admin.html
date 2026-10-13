@@ -11,7 +11,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance Admin</title>
-<link rel="stylesheet" href="app.css?v=29">
+<link rel="stylesheet" href="app.css?v=30">
 </head>
 <body>
 
@@ -245,8 +245,27 @@
   </div>
 </div>
 
-<script src="config.js?v=29"></script>
-<script src="common.js?v=29"></script>
-<script src="admin.js?v=29"></script>
+<!-- Missed punch added by the admin -->
+<div class="modal hidden" id="manual-modal">
+  <form class="box stack" id="manual-form">
+    <div class="modal-head"><h3 id="mp-title">Add missed punch</h3><button type="button" class="icon-btn" data-close></button></div>
+    <div class="small" id="mp-who"></div>
+    <div class="grid2">
+      <div><label for="mp-type">Punch</label>
+        <select id="mp-type"><option value="IN">Check In</option><option value="LUNCH_OUT">Lunch Out</option><option value="LUNCH_IN">Lunch In</option><option value="OUT">Check Out</option></select></div>
+      <div><label for="mp-time">Time</label><input id="mp-time" type="time" required></div>
+    </div>
+    <div><label for="mp-reason">Reason (optional)</label><input id="mp-reason" type="text" maxlength="100" placeholder="Forgot phone, battery dead..."></div>
+    <p class="muted small" id="mp-hint" style="margin:0"></p>
+    <div style="display:flex;gap:8px">
+      <button type="button" class="btn danger hidden" id="mp-delete">Delete</button>
+      <button class="btn" type="submit" style="flex:1">Save punch</button>
+    </div>
+  </form>
+</div>
+
+<script src="config.js?v=30"></script>
+<script src="common.js?v=30"></script>
+<script src="admin.js?v=30"></script>
 </body>
 </html>
