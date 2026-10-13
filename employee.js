@@ -40,6 +40,7 @@ $('#login-form').addEventListener('submit', async function (ev) {
   btn.innerHTML = '<span class="spinner"></span>';
   try {
     const t0 = Date.now();
+    if ($('#co-code')) setCompany($('#co-code').value);
     const r = await api('login', { empId: $('#emp-id').value.trim(), pin: $('#emp-pin').value.trim() });
     S.token = r.token;
     store.set('att_token', r.token);

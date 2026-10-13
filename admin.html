@@ -11,7 +11,7 @@
 <link rel="icon" href="icon.svg">
 <link rel="apple-touch-icon" href="icon-192.png">
 <title>Attendance Admin</title>
-<link rel="stylesheet" href="app.css?v=30">
+<link rel="stylesheet" href="app.css?v=31">
 </head>
 <body>
 
@@ -23,12 +23,17 @@
       <p class="muted">Attendance management</p>
     </div>
     <form id="login-form" class="card stack">
+      <div class="company-field hidden">
+        <label for="co-code">Company code</label>
+        <input id="co-code" type="text" autocapitalize="characters" autocomplete="organization" maxlength="12">
+      </div>
       <div>
         <label for="admin-pw">Admin password</label>
         <input id="admin-pw" type="password" autocomplete="current-password" required>
       </div>
       <button class="btn block" type="submit">Log in</button>
     </form>
+    <div class="trial-slot"></div>
     <button class="btn ghost block install-btn hidden" style="margin-top:12px">Install admin app</button>
     <div class="brand-foot"><img src="tgra-mark.png" alt="">TGRA</div>
   </div>
@@ -85,6 +90,7 @@
       <div><label for="emp-search">Search</label><input type="text" id="emp-search" placeholder="Name, ID or department"></div>
       <button class="btn" id="emp-add">+ Add employee</button>
     </div>
+    <p class="small hidden" id="emp-share" style="margin:0 0 12px"></p>
     <div class="table-wrap">
       <table>
         <thead><tr><th>ID</th><th>Name</th><th>Department</th><th>Shift</th><th class="num">Lunch</th><th class="num">Grace</th><th>Weekly off</th><th>PIN</th><th>Face</th><th>Status</th><th></th></tr></thead>
@@ -264,8 +270,8 @@
   </form>
 </div>
 
-<script src="config.js?v=30"></script>
-<script src="common.js?v=30"></script>
-<script src="admin.js?v=30"></script>
+<script src="config.js?v=31"></script>
+<script src="common.js?v=31"></script>
+<script src="admin.js?v=31"></script>
 </body>
 </html>

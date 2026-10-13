@@ -37,6 +37,7 @@ $('#login-form').addEventListener('submit', async function (ev) {
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>';
   try {
+    if ($('#co-code')) setCompany($('#co-code').value);
     const r = await api('adminLogin', { password: $('#admin-pw').value });
     A.token = r.token;
     store.set('att_admin_token', r.token);
@@ -457,6 +458,12 @@ async function loadEmployees() {
 }
 
 function renderEmployees() {
+  const code = (A.settings && A.settings.companyCode) || companyCode();
+  if (code) {
+    const link = location.href.replace(/admin\.html.*$/, '') + '?c=' + code;
+    $('#emp-share').innerHTML = 'Staff log in with company code <b>' + esc(code) + '</b> · staff app link: <a href="' + esc(link) + '" target="_blank" rel="noopener">' + esc(link) + '</a>';
+  }
+  $('#emp-share').classList.toggle('hidden', !code);
   const q = $('#emp-search').value.trim().toLowerCase();
   const list = (A.employees || []).filter(function (e) { return !q || (e.id + ' ' + e.name + ' ' + e.dept).toLowerCase().indexOf(q) >= 0; });
   $('#emp-rows').innerHTML = list.length ? list.map(function (e) {

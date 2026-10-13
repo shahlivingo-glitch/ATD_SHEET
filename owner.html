@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0f766e">
+<meta name="robots" content="noindex">
+<link rel="icon" href="icon.svg">
+<title>Owner Panel</title>
+<link rel="stylesheet" href="app.css?v=31">
+</head>
+<body>
+
+<section id="v-login" class="hidden">
+  <div class="wrap">
+    <div class="login-hero">
+      <img class="logo" src="icon.svg" alt="">
+      <h1>Owner Panel</h1>
+      <p class="muted">Give each company its own admin panel</p>
+    </div>
+    <form id="login-form" class="card stack">
+      <div>
+        <label for="own-pw">Owner password</label>
+        <input id="own-pw" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn block" type="submit">Log in</button>
+    </form>
+  </div>
+</section>
+
+<section id="v-main" class="hidden">
+  <header class="topbar">
+    <h1>Owner Panel</h1>
+    <button class="icon-btn" id="btn-refresh" title="Refresh"></button>
+    <button class="icon-btn" id="btn-logout" title="Log out"></button>
+  </header>
+  <div class="wrap wide">
+    <form id="new-form" class="card stack">
+      <h3 style="font-size:17px;margin:0">New company panel</h3>
+      <div class="grid2">
+        <div><label for="n-name">Company name</label><input id="n-name" type="text" maxlength="80" required></div>
+        <div><label for="n-contact">Contact person</label><input id="n-contact" type="text" maxlength="60"></div>
+        <div><label for="n-phone">WhatsApp number</label><input id="n-phone" type="tel" maxlength="16"></div>
+        <div><label for="n-days">Free trial days (0 = no end)</label><input id="n-days" type="number" min="0" max="365" value="15"></div>
+      </div>
+      <p class="muted small" id="n-from" style="margin:0"></p>
+      <button class="btn block" type="submit">Create admin panel</button>
+    </form>
+
+    <div id="requests"></div>
+
+    <h3 style="font-size:17px;margin:20px 0 8px">Companies</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Company</th><th>Code</th><th>Contact</th><th>Trial ends</th><th>Status</th><th></th></tr></thead>
+        <tbody id="co-rows"></tbody>
+      </table>
+    </div>
+    <p class="muted small">Each company has its own Google Sheet (in the "Companies" folder of your Drive). They never see each other's data.</p>
+  </div>
+</section>
+
+<!-- Login message to send -->
+<div class="modal hidden" id="give-modal">
+  <div class="box stack">
+    <div class="modal-head"><h3 id="give-title">Panel ready</h3><button type="button" class="icon-btn" data-close></button></div>
+    <textarea id="give-text" rows="16" readonly style="width:100%;font:inherit;font-size:14px;padding:10px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--ink)"></textarea>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" class="btn ghost" id="give-copy" style="flex:1">Copy message</button>
+      <a class="btn" id="give-wa" target="_blank" rel="noopener" style="flex:1;text-align:center">Send on WhatsApp</a>
+    </div>
+  </div>
+</div>
+
+<!-- Edit one company -->
+<div class="modal hidden" id="edit-modal">
+  <form class="box stack" id="edit-form">
+    <div class="modal-head"><h3 id="edit-title">Company</h3><button type="button" class="icon-btn" data-close></button></div>
+    <div class="grid2">
+      <div><label for="e-contact">Contact person</label><input id="e-contact" type="text" maxlength="60"></div>
+      <div><label for="e-phone">WhatsApp number</label><input id="e-phone" type="tel" maxlength="16"></div>
+      <div><label for="e-ends">Free trial ends (empty = no end)</label><input id="e-ends" type="date"></div>
+      <div><label for="e-notes">Notes</label><input id="e-notes" type="text" maxlength="200"></div>
+    </div>
+    <label class="switch"><input type="checkbox" id="e-active"> Switched on (staff and admin can use it)</label>
+    <button class="btn block" type="submit">Save</button>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button type="button" class="btn ghost" id="e-open" style="flex:1">Open their admin panel</button>
+      <button type="button" class="btn ghost" id="e-reset" style="flex:1">New admin password</button>
+    </div>
+  </form>
+</div>
+
+<script src="config.js?v=31"></script>
+<script src="common.js?v=31"></script>
+<script src="owner.js?v=31"></script>
+</body>
+</html>

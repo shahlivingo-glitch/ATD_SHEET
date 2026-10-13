@@ -242,6 +242,8 @@ input:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px co
   display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 22px; letter-spacing: .04em; color: #fff; }
 .punch-strip .p .th.face { background: var(--in); }
 .punch-strip .p .th.absent { background: var(--out); }
+.trial-card { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; border-color: var(--brand); }
+.trial-card b { font-size: 16px; }
 .punch-strip .p .th.manual { background: #2f6fde; font-size: 13px; }
 .punch-strip .p .th.add { background: transparent; border: 1.5px dashed var(--line); color: var(--muted); font-weight: 400; font-size: 26px; }
 .punch-strip .p:hover .th.add { border-color: var(--muted); color: var(--ink); }

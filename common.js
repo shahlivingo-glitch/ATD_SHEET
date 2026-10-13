@@ -1,6 +1,7 @@
 // Shared helpers for the employee app and the admin dashboard.
 
-const API_URL = (window.ATTENDANCE_CONFIG || {}).apiUrl || '';
+const CONFIG = window.ATTENDANCE_CONFIG || {};
+const API_URL = CONFIG.apiUrl || '';
 
 async function api(action, data, timeoutMs) {
   if (!API_URL || API_URL.indexOf('script.google.com') < 0) {
@@ -14,7 +15,7 @@ async function api(action, data, timeoutMs) {
     res = await fetch(API_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(Object.assign({ action: action }, data || {})),
+      body: JSON.stringify(withCompany(Object.assign({ action: action }, data || {}))),
       redirect: 'follow',
       signal: ctrl ? ctrl.signal : undefined,
     });
@@ -56,6 +57,78 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* private mode */ } },
   del(k) { try { localStorage.removeItem(k); } catch (e) { /* private mode */ } },
 };
+
+/* ---------- company code (one server can hold many companies, each with its own sheet) ---------- */
+function companyCode() { return store.get('att_co_code') || ''; }
+
+/** Switching company forgets the logins and queues of the old one. */
+function setCompany(code) {
+  code = String(code || '').trim().toUpperCase();
+  if (code === companyCode()) return;
+  ['att_token', 'att_admin_token', 'att_last', 'att_company', 'att_uploads', 'att_out_q', 'att_trip'].forEach(function (k) { store.del(k); });
+  if (code) store.set('att_co_code', code); else store.del('att_co_code');
+}
+
+(function () {
+  try { const c = new URLSearchParams(location.search).get('c'); if (c !== null) setCompany(c); } catch (e) { /* old browser */ }
+})();
+
+function withCompany(body) {
+  const c = companyCode();
+  return c && body.company === undefined ? Object.assign({ company: c }, body) : body;
+}
+
+/** Login screens show the company code box when the server holds several companies. */
+function setupCompanyField() {
+  const row = document.querySelector('.company-field');
+  if (!row) return;
+  row.classList.toggle('hidden', !(CONFIG.multi || companyCode()));
+  row.querySelector('input').value = companyCode();
+}
+
+/** Trial server only: "Get a free trial" card on the login screens, saved for the owner panel. */
+function setupTrialRequest() {
+  const slot = document.querySelector('.trial-slot');
+  if (!slot || !CONFIG.multi) return;
+  slot.innerHTML = '<div class="card trial-card"><b>New company? Get a FREE trial</b>' +
+    '<span class="muted small">Selfie, face and GPS attendance for your staff. Free of cost, no card needed.</span>' +
+    '<button type="button" class="btn block">Get free trial</button></div>';
+  const m = document.createElement('div');
+  m.className = 'modal hidden';
+  m.id = 'trial-modal';
+  m.innerHTML = '<form class="box stack" id="trial-form"><div class="modal-head"><h3>Free trial for your company</h3>' +
+    '<button type="button" class="icon-btn" data-x>' + ICONS.close + '</button></div>' +
+    '<p class="muted small" style="margin:0">Fill this in and we will send your company\'s own admin panel and staff app on WhatsApp.</p>' +
+    '<div><label for="tr-company">Company name</label><input id="tr-company" type="text" maxlength="80" required></div>' +
+    '<div class="grid2"><div><label for="tr-name">Your name</label><input id="tr-name" type="text" maxlength="60"></div>' +
+    '<div><label for="tr-phone">Mobile (WhatsApp)</label><input id="tr-phone" type="tel" maxlength="16" required></div>' +
+    '<div><label for="tr-city">City</label><input id="tr-city" type="text" maxlength="60"></div>' +
+    '<div><label for="tr-staff">Number of staff</label><input id="tr-staff" type="number" min="1" max="100000"></div></div>' +
+    '<button class="btn block" type="submit">Send request</button></form>';
+  document.body.appendChild(m);
+  const close = function () { m.classList.add('hidden'); };
+  slot.querySelector('button').addEventListener('click', function () { m.classList.remove('hidden'); $('#tr-company').focus(); });
+  m.querySelector('[data-x]').addEventListener('click', close);
+  m.addEventListener('click', function (ev) { if (ev.target === m) close(); });
+  $('#trial-form').addEventListener('submit', async function (ev) {
+    ev.preventDefault();
+    const btn = this.querySelector('button[type=submit]');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+    try {
+      const r = await api('requestTrial', { company: '', companyName: $('#tr-company').value, name: $('#tr-name').value,
+        phone: $('#tr-phone').value, city: $('#tr-city').value, staff: $('#tr-staff').value });
+      this.reset();
+      close();
+      toast(r.message);
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Send request';
+    }
+  });
+}
 
 let toastTimer;
 function toast(msg, isErr) {
@@ -274,3 +347,6 @@ document.addEventListener('DOMContentLoaded', function () {
   });
   if (ios) document.addEventListener('DOMContentLoaded', function () { showAll(true); });
 })();
+
+setupCompanyField();
+setupTrialRequest();

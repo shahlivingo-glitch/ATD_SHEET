@@ -140,7 +140,7 @@
     try {
       const http = plugin('CapacitorHttp');
       if (http && http.request) {
-        const r = await http.request({ method: 'POST', url: API_URL, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, data: JSON.stringify(body) });
+        const r = await http.request({ method: 'POST', url: API_URL, headers: { 'Content-Type': 'text/plain;charset=utf-8' }, data: JSON.stringify(withCompany(body)) });
         const j = typeof r.data === 'string' ? JSON.parse(r.data) : r.data;
         return !!(j && (j.ok || /not your|bad /i.test(j.error || ''))); // drop records the server can never accept
       }

@@ -1,6 +1,7 @@
-const VERSION = '2026-10-13.1';
+const VERSION = '2026-10-13.2';
 
-const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside' };
+const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside',
+  CO: 'Companies', REQ: 'Requests' };
 
 const EMP_COLS = ['EmpID', 'Name', 'PIN', 'Phone', 'Department', 'ShiftStart', 'ShiftEnd',
   'LunchMinutes', 'GraceMinutes', 'WeeklyOff', 'AllowedLocations', 'Active', 'JoinDate', 'CanPunchOthers', 'FaceData', 'FaceRegistered', 'LunchStart', 'HalfDayOff'];
@@ -11,6 +12,10 @@ const LOC_COLS = ['Name', 'Latitude', 'Longitude', 'RadiusM'];
 const HOL_COLS = ['Date', 'Name'];
 const OUT_COLS = ['ID', 'WorkDate', 'EmpID', 'Name', 'Start', 'End', 'Minutes', 'MaxDistanceM', 'Place', 'Updated'];
 const ALERT_COLS = ['Timestamp', 'WorkDate', 'EmpID', 'Name', 'Type', 'Detail', 'Latitude', 'Longitude'];
+const COMPANY_COLS = ['Code', 'Name', 'SheetID', 'Contact', 'Phone', 'Created', 'TrialEnds', 'Active', 'Notes'];
+const REQ_COLS = ['Time', 'Company', 'Name', 'Phone', 'City', 'Staff', 'Status', 'Code'];
+
+let CO = null;
 
 const DEFAULT_SETTINGS = [
   ['COMPANY_NAME', 'My Company', 'Shown in the app and on every selfie stamp'],
@@ -34,7 +39,22 @@ const LABEL = { IN: 'Check In', LUNCH_OUT: 'Lunch Out', LUNCH_IN: 'Lunch In', OU
 const NEXT = { '': ['IN'], IN: ['LUNCH_OUT', 'OUT'], LUNCH_OUT: ['LUNCH_IN'], LUNCH_IN: ['LUNCH_OUT', 'OUT'], OUT: [] };
 
 function setup() {
-  const ss = SpreadsheetApp.getActive();
+  CO = null;
+  resetMemo_();
+  prepare_(null, '');
+  if (!settings_().OWNER_PASSWORD) setSetting_('OWNER_PASSWORD', 'owner' + Math.floor(100000 + Math.random() * 900000));
+  try { Maps.newGeocoder().reverseGeocode(19.076, 72.8777); } catch (e) { }
+  clearDataCache_();
+  const msg = 'Setup complete.\n\nAdmin password: ' + settings_().ADMIN_PASSWORD +
+    '\nOwner panel password: ' + settings_().OWNER_PASSWORD +
+    '\n(Both are in the Settings tab.)\n\nNow deploy: Deploy > New deployment > Web app,' +
+    ' Execute as: Me, Who has access: Anyone.';
+  Logger.log(msg);
+  try { SpreadsheetApp.getUi().alert(msg); } catch (e) { }
+}
+
+function prepare_(parent, name) {
+  const ss = ss_();
   ensureSheet_(ss, SH.EMP, EMP_COLS, ['EmpID', 'PIN', 'Phone', 'ShiftStart', 'ShiftEnd', 'WeeklyOff', 'AllowedLocations', 'JoinDate']);
   ensureSheet_(ss, SH.PUNCH, PUNCH_COLS, ['WorkDate', 'EmpID']);
   ensureSheet_(ss, SH.LOC, LOC_COLS, ['Name']);
@@ -45,12 +65,12 @@ function setup() {
 
   const have = settings_();
   DEFAULT_SETTINGS.forEach(function (d) {
-    if (!(d[0] in have)) sheet_(SH.SET).appendRow([d[0], txt_(d[1]), d[2]]);
+    if (!(d[0] in have)) sheet_(SH.SET).appendRow([d[0], txt_(d[0] === 'COMPANY_NAME' && name ? name : d[1]), d[2]]);
   });
   clearDataCache_();
   const s = settings_();
   if (!s.ADMIN_PASSWORD) setSetting_('ADMIN_PASSWORD', 'admin' + Math.floor(100000 + Math.random() * 900000));
-  if (!s.PHOTO_FOLDER_ID) setSetting_('PHOTO_FOLDER_ID', DriveApp.createFolder(ss.getName() + ' - Selfies').getId());
+  if (!s.PHOTO_FOLDER_ID) setSetting_('PHOTO_FOLDER_ID', (parent || DriveApp).createFolder(ss.getName() + ' - Selfies').getId());
   secret_();
 
   const emp = sheet_(SH.EMP);
@@ -61,39 +81,53 @@ function setup() {
     const sh = ss.getSheetByName(n);
     if (sh && ss.getSheets().length > 1 && sh.getLastRow() === 0) ss.deleteSheet(sh);
   });
-  try { Maps.newGeocoder().reverseGeocode(19.076, 72.8777); } catch (e) {   }
-
   clearDataCache_();
-  const msg = 'Setup complete.\n\nAdmin password: ' + settings_().ADMIN_PASSWORD +
-    '\n(Change it in the Settings tab or from the dashboard.)\n\nNow deploy: Deploy > New deployment > Web app,' +
-    ' Execute as: Me, Who has access: Anyone.';
-  Logger.log(msg);
-  try { SpreadsheetApp.getUi().alert(msg); } catch (e) {   }
+}
+
+function ss_() {
+  return CO ? CO.ss : SpreadsheetApp.getActive();
+}
+
+function cache_() {
+  const c = CacheService.getScriptCache(), p = CO ? CO.code + ':' : '';
+  return {
+    get: function (k) { return c.get(p + k); },
+    put: function (k, v, t) { return c.put(p + k, v, t); },
+    remove: function (k) { return c.remove(p + k); },
+    removeAll: function (ks) { return c.removeAll(ks.map(function (k) { return p + k; })); },
+  };
+}
+
+function resetMemo_() {
+  EMPLOYEES_MEMO = null;
+  SETTINGS_MEMO = null;
 }
 
 const DATA_CACHE = ['emp_v1', 'set_v1', 'hol_v1', 'loc_v1'];
 
 function cacheGet_(key) {
-  try { const v = CacheService.getScriptCache().get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+  try { const v = cache_().get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
 }
 
 function cachePut_(key, value) {
-  try { const v = JSON.stringify(value); if (v.length < 95000) CacheService.getScriptCache().put(key, v, 600); } catch (e) { }
+  try { const v = JSON.stringify(value); if (v.length < 95000) cache_().put(key, v, 600); } catch (e) { }
 }
 
 function clearDataCache_() {
-  try { CacheService.getScriptCache().removeAll(DATA_CACHE); } catch (e) { }
+  try { cache_().removeAll(DATA_CACHE); } catch (e) { }
   EMPLOYEES_MEMO = null;
   SETTINGS_MEMO = null;
 }
 
 function forgetEmployees_() {
-  try { CacheService.getScriptCache().remove('emp_v1'); } catch (e) { }
+  try { cache_().remove('emp_v1'); } catch (e) { }
   EMPLOYEES_MEMO = null;
 }
 
 function onEdit() {
+  CO = null;
   clearDataCache_();
+  try { CacheService.getScriptCache().remove('companies_v1'); } catch (e) { }
 }
 
 function onOpen() {
@@ -101,9 +135,9 @@ function onOpen() {
 }
 
 function ensureSchema_() {
-  const cache = CacheService.getScriptCache();
+  const cache = cache_();
   if (cache.get('schema') === '8') return;
-  const ss = SpreadsheetApp.getActive();
+  const ss = ss_();
   [[SH.EMP, EMP_COLS], [SH.PUNCH, PUNCH_COLS]].forEach(function (x) {
     const sh = ss.getSheetByName(x[0]);
     if (!sh || sh.getLastRow() === 0) return;
@@ -169,13 +203,23 @@ const ROUTES = {
   health: health_,
   adminSaveFace: adminSaveFace_,
   adminResetFace: adminResetFace_,
+  ownerLogin: ownerLogin_,
+  ownerData: ownerData_,
+  ownerCreateCompany: ownerCreateCompany_,
+  ownerSaveCompany: ownerSaveCompany_,
+  ownerResetAdmin: ownerResetAdmin_,
+  ownerOpenAdmin: ownerOpenAdmin_,
+  ownerSaveRequest: ownerSaveRequest_,
+  requestTrial: requestTrial_,
 };
 
 function doPost(e) {
   let out;
   try {
-    ensureSchema_();
+    CO = null;
     const req = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    if (!ROOT_ACTIONS[req.action]) useCompany_(req.company);
+    ensureSchema_();
     const fn = ROUTES[req.action];
     if (!fn) throw new Error('Unknown action');
     out = Object.assign({ ok: true }, fn(req));
@@ -364,7 +408,7 @@ function reportAway_(req) {
   const minutes = Math.max(0, Math.round(num_(req.minutes, 0)));
   const dist = Math.round(num_(req.distance, 0));
   const key = 'away:' + e.id + ':' + wd;
-  const cache = CacheService.getScriptCache();
+  const cache = cache_();
   if (cache.get(key)) return { duplicate: true };
   cache.put(key, '1', 21600);
   const detail = 'Outside ' + (req.place ? String(req.place).slice(0, 60) + ' ' : 'work location ') + 'for ' + minutes +
@@ -411,7 +455,7 @@ function reportOutside_(req) {
 }
 
 function outsideFor_(from, to) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(SH.OUT);
+  const sh = ss_().getSheetByName(SH.OUT);
   if (!sh || sh.getLastRow() < 2) return [];
   const c = headerMap_(sh);
   const last = sh.getLastRow();
@@ -426,7 +470,7 @@ function outsideFor_(from, to) {
 }
 
 function alertsFor_(date) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(SH.ALERT);
+  const sh = ss_().getSheetByName(SH.ALERT);
   if (!sh || sh.getLastRow() < 2) return [];
   const c = headerMap_(sh);
   const last = sh.getLastRow();
@@ -443,13 +487,13 @@ function adminTestPush_(req) {
   authAdmin_(req.token);
   const e = findEmployee_(req.id);
   if (!e) throw new Error('Employee not found.');
-  CacheService.getScriptCache().put('note:' + e.id.toUpperCase(), JSON.stringify({
+  cache_().put('note:' + e.id.toUpperCase(), JSON.stringify({
     id: Utilities.getUuid().slice(0, 8), title: 'Attendance test', body: 'Test from the admin: notifications are working on this phone.' }), 21600);
   return { queued: true };
 }
 
 function takeNotice_(e) {
-  const cache = CacheService.getScriptCache();
+  const cache = cache_();
   const key = 'note:' + e.id.toUpperCase();
   const v = cache.get(key);
   if (!v) return null;
@@ -485,7 +529,7 @@ function attachPhoto_(req) {
   if (!mine) throw new Error('Not your punch');
   if (String(found[0].r[c.PhotoID] || '')) return { photoId: String(found[0].r[c.PhotoID]) };
 
-  const cache = CacheService.getScriptCache();
+  const cache = cache_();
   if (cache.get('attach:' + id)) return { busy: true };
   cache.put('attach:' + id, '1', 120);
   try {
@@ -572,6 +616,252 @@ function next_(last) {
 
 function autoLunch_() {
   return /^auto/i.test(settings_().LUNCH_MODE || '');
+}
+
+const ROOT_ACTIONS = { ownerLogin: 1, ownerData: 1, ownerCreateCompany: 1, ownerSaveCompany: 1, ownerResetAdmin: 1,
+  ownerOpenAdmin: 1, ownerSaveRequest: 1, requestTrial: 1 };
+
+function root_() {
+  return SpreadsheetApp.getActive();
+}
+
+function rootSheet_(name) {
+  const sh = root_().getSheetByName(name);
+  if (sh) return sh;
+  return name === SH.CO
+    ? ensureSheet_(root_(), SH.CO, COMPANY_COLS, ['Code', 'SheetID', 'Phone', 'Created', 'TrialEnds'])
+    : ensureSheet_(root_(), SH.REQ, REQ_COLS, ['Phone', 'Code']);
+}
+
+function companies_() {
+  const c = CacheService.getScriptCache();
+  try { const v = c.get('companies_v1'); if (v) return JSON.parse(v); } catch (e) { }
+  const sh = root_().getSheetByName(SH.CO);
+  const out = [];
+  if (sh && sh.getLastRow() > 1) {
+    const h = headerMap_(sh);
+    const g = function (r, k) { return h[k] === undefined ? '' : r[h[k]]; };
+    sh.getRange(2, 1, sh.getLastRow() - 1, sh.getLastColumn()).getValues().forEach(function (r, i) {
+      const code = String(g(r, 'Code')).trim().toUpperCase();
+      if (!code) return;
+      out.push({ row: i + 2, code: code, name: String(g(r, 'Name')), sheetId: String(g(r, 'SheetID')).trim(),
+        contact: String(g(r, 'Contact')), phone: String(g(r, 'Phone')), created: dstr_(g(r, 'Created')),
+        trialEnds: dstr_(g(r, 'TrialEnds')), active: !/^(no|false|0|off)$/i.test(String(g(r, 'Active')).trim()), notes: String(g(r, 'Notes')) });
+    });
+  }
+  try { c.put('companies_v1', JSON.stringify(out), 600); } catch (e) { }
+  return out;
+}
+
+function companyByCode_(code) {
+  code = String(code || '').trim().toUpperCase();
+  const c = companies_().filter(function (x) { return x.code === code; })[0];
+  if (!c) throw new Error('Company code ' + code + ' not found. Check the code and try again.');
+  return c;
+}
+
+function useCompany_(code) {
+  if (!String(code || '').trim()) return;
+  const c = companyByCode_(code);
+  if (!c.active) throw new Error('This account is switched off. Contact the app provider.');
+  if (c.trialEnds && c.trialEnds < fmt_(new Date(), 'yyyy-MM-dd')) {
+    throw new Error('The free trial for ' + c.name + ' has ended. Contact the app provider to continue.');
+  }
+  enterCompany_(c);
+}
+
+function enterCompany_(c) {
+  CO = { code: c.code, ss: SpreadsheetApp.openById(c.sheetId) };
+  resetMemo_();
+}
+
+function leaveCompany_() {
+  CO = null;
+  resetMemo_();
+}
+
+function clip_(v, n) {
+  return String(v === undefined || v === null ? '' : v).replace(/\s+/g, ' ').trim().slice(0, n);
+}
+
+function newCode_() {
+  const a = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = '';
+  for (let i = 0; i < 6; i++) s += a.charAt(Math.floor(Math.random() * a.length));
+  return s;
+}
+
+function newPassword_() {
+  return 'admin' + Math.floor(100000 + Math.random() * 900000);
+}
+
+function companiesFolder_() {
+  const id = settings_().COMPANIES_FOLDER_ID;
+  if (id) { try { return DriveApp.getFolderById(id); } catch (e) { } }
+  const f = DriveApp.createFolder(root_().getName() + ' - Companies');
+  setSetting_('COMPANIES_FOLDER_ID', f.getId());
+  return f;
+}
+
+function ownerLogin_(req) {
+  throttle_('owner');
+  const pw = String(settings_().OWNER_PASSWORD || '');
+  if (!pw) throw new Error('The owner panel is not set up here. Run setup in the Google Sheet once.');
+  if (String(req.password || '') !== pw) {
+    failed_('owner');
+    throw new Error('Wrong password.');
+  }
+  return { token: sign_({ r: 'owner', pv: hash_(pw), exp: Date.now() + 30 * 864e5 }) };
+}
+
+function authOwner_(token) {
+  const p = verify_(token, 'owner');
+  const pw = String(settings_().OWNER_PASSWORD || '');
+  if (!pw || p.pv !== hash_(pw)) throw new Error('AUTH: Please log in again.');
+}
+
+function ownerData_(req) {
+  authOwner_(req.token);
+  const today = fmt_(new Date(), 'yyyy-MM-dd');
+  const companies = companies_().map(function (c) {
+    return { code: c.code, name: c.name, contact: c.contact, phone: c.phone, created: c.created, trialEnds: c.trialEnds,
+      active: c.active, notes: c.notes, status: !c.active ? 'Off' : (c.trialEnds && c.trialEnds < today ? 'Ended' : 'Active') };
+  }).reverse();
+  const sh = root_().getSheetByName(SH.REQ);
+  const requests = [];
+  if (sh && sh.getLastRow() > 1) {
+    const h = headerMap_(sh);
+    const from = Math.max(2, sh.getLastRow() - 299);
+    sh.getRange(from, 1, sh.getLastRow() - from + 1, sh.getLastColumn()).getValues().forEach(function (r, i) {
+      const t = r[h.Time];
+      requests.push({ row: from + i, time: t instanceof Date ? t.getTime() : new Date(t).getTime() || 0, company: String(r[h.Company]),
+        name: String(r[h.Name]), phone: String(r[h.Phone]), city: String(r[h.City]), staff: String(r[h.Staff]),
+        status: String(r[h.Status]), code: String(r[h.Code]) });
+    });
+  }
+  return { companies: companies, requests: requests.reverse(), today: today, tz: tz_() };
+}
+
+function ownerCreateCompany_(req) {
+  authOwner_(req.token);
+  const name = clip_(req.name, 80);
+  if (!name) throw new Error('Enter the company name.');
+  const days = Math.max(0, Math.min(365, Math.round(num_(req.trialDays, 15))));
+  const tz = tz_(), today = fmt_(new Date(), 'yyyy-MM-dd');
+  const trialEnds = days ? addDays_(today, days) : '';
+  let code, pw, book;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    CacheService.getScriptCache().remove('companies_v1');
+    const taken = companies_().map(function (c) { return c.code; });
+    do { code = newCode_(); } while (taken.indexOf(code) >= 0);
+    const folder = companiesFolder_();
+    book = SpreadsheetApp.create('Attendance - ' + name + ' (' + code + ')');
+    try { book.setSpreadsheetTimeZone(tz); } catch (e) { }
+    try { DriveApp.getFileById(book.getId()).moveTo(folder); } catch (e) { }
+    CO = { code: code, ss: book };
+    resetMemo_();
+    prepare_(folder, name);
+    pw = settings_().ADMIN_PASSWORD;
+    leaveCompany_();
+    rootSheet_(SH.CO).appendRow([txt_(code), txt_(name), txt_(book.getId()), txt_(clip_(req.contact, 60)), txt_(clip_(req.phone, 30)),
+      txt_(today), txt_(trialEnds), 'Yes', '']);
+    if (req.requestRow) markRequest_(req.requestRow, 'Done', code);
+    CacheService.getScriptCache().remove('companies_v1');
+  } finally {
+    leaveCompany_();
+    lock.releaseLock();
+  }
+  return { created: { code: code, name: name, trialEnds: trialEnds, adminPassword: pw } };
+}
+
+function ownerSaveCompany_(req) {
+  authOwner_(req.token);
+  CacheService.getScriptCache().remove('companies_v1');
+  const c = companyByCode_(req.code);
+  const sh = rootSheet_(SH.CO), h = headerMap_(sh);
+  const set = function (k, v) { if (h[k] !== undefined) sh.getRange(c.row, h[k] + 1).setValue(v); };
+  if (req.contact !== undefined) set('Contact', txt_(clip_(req.contact, 60)));
+  if (req.phone !== undefined) set('Phone', txt_(clip_(req.phone, 30)));
+  if (req.notes !== undefined) set('Notes', txt_(clip_(req.notes, 200)));
+  if (req.trialEnds !== undefined) {
+    const d = dateParam_(req.trialEnds);
+    if (req.trialEnds && !d) throw new Error('Choose a valid trial end date.');
+    set('TrialEnds', txt_(d));
+  }
+  if (req.active !== undefined) set('Active', req.active ? 'Yes' : 'No');
+  CacheService.getScriptCache().remove('companies_v1');
+  return ownerData_(req);
+}
+
+function ownerResetAdmin_(req) {
+  authOwner_(req.token);
+  const c = companyByCode_(req.code);
+  const pw = newPassword_();
+  try {
+    enterCompany_(c);
+    setSetting_('ADMIN_PASSWORD', pw);
+  } finally {
+    leaveCompany_();
+  }
+  return { code: c.code, adminPassword: pw };
+}
+
+function ownerOpenAdmin_(req) {
+  authOwner_(req.token);
+  const c = companyByCode_(req.code);
+  try {
+    enterCompany_(c);
+    return { code: c.code, token: adminToken_(String(settings_().ADMIN_PASSWORD || '')) };
+  } finally {
+    leaveCompany_();
+  }
+}
+
+function markRequest_(row, status, code) {
+  const sh = rootSheet_(SH.REQ), h = headerMap_(sh);
+  row = Math.round(Number(row));
+  if (!(row >= 2 && row <= sh.getLastRow())) throw new Error('Request not found. Refresh and try again.');
+  sh.getRange(row, h.Status + 1).setValue(status);
+  if (code !== undefined) sh.getRange(row, h.Code + 1).setValue(txt_(code));
+}
+
+function ownerSaveRequest_(req) {
+  authOwner_(req.token);
+  const st = String(req.status || '');
+  if (!/^(New|Done|Ignored)$/.test(st)) throw new Error('Unknown status.');
+  markRequest_(req.row, st);
+  return ownerData_(req);
+}
+
+function requestTrial_(req) {
+  const company = clip_(req.companyName, 80), name = clip_(req.name, 60), city = clip_(req.city, 60), staff = clip_(req.staff, 20);
+  const phone = String(req.phone || '').replace(/[^\d+]/g, '').slice(0, 15);
+  if (!company) throw new Error('Enter your company name.');
+  if (phone.replace(/\D/g, '').length < 10) throw new Error('Enter a valid mobile number.');
+  const c = CacheService.getScriptCache();
+  const n = Number(c.get('trialreq') || 0);
+  if (n >= 30) throw new Error('Too many requests right now. Please try again in an hour.');
+  c.put('trialreq', String(n + 1), 3600);
+  const lock = LockService.getScriptLock();
+  lock.waitLock(25000);
+  try {
+    const sh = rootSheet_(SH.REQ);
+    const last = sh.getLastRow();
+    if (last > 1) {
+      const h = headerMap_(sh);
+      const from = Math.max(2, last - 199);
+      const dup = sh.getRange(from, 1, last - from + 1, sh.getLastColumn()).getValues().some(function (r) {
+        return String(r[h.Phone]) === phone && String(r[h.Status]) === 'New';
+      });
+      if (dup) return { message: 'We already have your request. We will send your free trial login on WhatsApp soon.' };
+    }
+    sh.appendRow([new Date(), txt_(company), txt_(name), txt_(phone), txt_(city), txt_(staff), 'New', '']);
+  } finally {
+    lock.releaseLock();
+  }
+  return { message: 'Thank you! We will send your free trial login on WhatsApp soon.' };
 }
 
 function adminLogin_(req) {
@@ -768,7 +1058,7 @@ function adminSaveLocation_(req) {
   if (!name) throw new Error('Location name is required.');
   if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) throw new Error('Invalid coordinates.');
   if (radius < 10 || radius > 50000) throw new Error('Radius must be between 10 and 50000 metres.');
-  try { CacheService.getScriptCache().remove('loc_v1'); } catch (e) { }
+  try { cache_().remove('loc_v1'); } catch (e) { }
   const sh = sheet_(SH.LOC);
   const v = sh.getDataRange().getValues();
   for (let i = 1; i < v.length; i++) {
@@ -784,7 +1074,7 @@ function adminSaveLocation_(req) {
 function adminDeleteLocation_(req) {
   authAdmin_(req.token);
   const name = String(req.name || '').trim().toLowerCase();
-  try { CacheService.getScriptCache().remove('loc_v1'); } catch (e) { }
+  try { cache_().remove('loc_v1'); } catch (e) { }
   const sh = sheet_(SH.LOC);
   const v = sh.getDataRange().getValues();
   for (let i = v.length - 1; i >= 1; i--) {
@@ -1169,7 +1459,7 @@ function distance_(a, b, c, d) {
 
 function address_(lat, lng) {
   const key = 'geo:' + lat.toFixed(4) + ',' + lng.toFixed(4);
-  const cache = CacheService.getScriptCache();
+  const cache = cache_();
   const hit = cache.get(key);
   if (hit !== null) return hit;
   let a = '';
@@ -1182,7 +1472,7 @@ function address_(lat, lng) {
 }
 
 function sheet_(name) {
-  const sh = SpreadsheetApp.getActive().getSheetByName(name);
+  const sh = ss_().getSheetByName(name);
   if (!sh) throw new Error('Sheet "' + name + '" is missing. Run setup() in the script editor.');
   return sh;
 }
@@ -1327,7 +1617,7 @@ function readLocations_() {
 function holidays_() {
   const cached = cacheGet_('hol_v1');
   if (cached) return cached;
-  const sh = SpreadsheetApp.getActive().getSheetByName(SH.HOL);
+  const sh = ss_().getSheetByName(SH.HOL);
   const out = {};
   if (!sh) return out;
   sh.getDataRange().getValues().slice(1).forEach(function (r) {
@@ -1344,7 +1634,7 @@ function settings_() {
   if (SETTINGS_MEMO) return SETTINGS_MEMO;
   const cached = cacheGet_('set_v1');
   if (cached) { SETTINGS_MEMO = cached; return cached; }
-  const sh = SpreadsheetApp.getActive().getSheetByName(SH.SET);
+  const sh = ss_().getSheetByName(SH.SET);
   const out = {};
   if (!sh) return out;
   SETTINGS_MEMO = out;
@@ -1357,7 +1647,7 @@ function settings_() {
 
 function setSetting_(key, value) {
   SETTINGS_MEMO = null;
-  try { CacheService.getScriptCache().remove('set_v1'); } catch (e) { }
+  try { cache_().remove('set_v1'); } catch (e) { }
   const sh = sheet_(SH.SET);
   const v = sh.getDataRange().getValues();
   for (let i = 1; i < v.length; i++) {
@@ -1371,7 +1661,8 @@ function publicSettings_() {
   return { company: s.COMPANY_NAME || '', enforceGeofence: enforceFence_(), maxAccuracy: num_(s.MAX_ACCURACY_M, 0), tz: tz_(),
     lunchMode: autoLunch_() ? 'AUTO' : 'SELFIE', faceMode: faceMode_(), faceThreshold: num_(s.FACE_THRESHOLD, 0.5),
     verifyInOut: verifyFor_('IN'), verifyLunch: verifyFor_('LUNCH_OUT'), faceStrict: faceStrict_(),
-    lunchStart: defaultLunchStart_(), awayMinutes: num_(s.AWAY_MINUTES, 15), minHalfDay: num_(s.MIN_HALF_DAY_HOURS, 3) };
+    lunchStart: defaultLunchStart_(), awayMinutes: num_(s.AWAY_MINUTES, 15), minHalfDay: num_(s.MIN_HALF_DAY_HOURS, 3),
+    companyCode: CO ? CO.code : '' };
 }
 
 function enforceFence_() {
@@ -1406,6 +1697,7 @@ function hash_(s) {
 }
 
 function sign_(payload) {
+  if (CO) payload = Object.assign({ c: CO.code }, payload);
   const body = Utilities.base64EncodeWebSafe(JSON.stringify(payload)).replace(/=+$/, '');
   return body + '.' + hmac_(body);
 }
@@ -1419,7 +1711,9 @@ function verify_(token, role) {
     while (b.length % 4) b += '=';
     p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(b)).getDataAsString());
   } catch (e) { throw new Error('AUTH: Please log in again.'); }
-  if (p.r !== role || !(p.exp > Date.now())) throw new Error('AUTH: Session expired. Please log in again.');
+  if (p.r !== role) throw new Error('AUTH: Please log in again.');
+  if (!(p.exp > Date.now())) throw new Error('AUTH: Session expired. Please log in again.');
+  if ((p.c || '') !== (CO ? CO.code : '')) throw new Error('AUTH: Please log in again.');
   return p;
 }
 
@@ -1441,17 +1735,17 @@ function authAdmin_(token) {
 }
 
 function throttle_(key) {
-  const n = Number(CacheService.getScriptCache().get('fail:' + key) || 0);
+  const n = Number(cache_().get('fail:' + key) || 0);
   if (n >= 5) throw new Error('Too many wrong attempts. Try again in 15 minutes.');
 }
 
 function failed_(key) {
-  const c = CacheService.getScriptCache();
+  const c = cache_();
   c.put('fail:' + key, String(Number(c.get('fail:' + key) || 0) + 1), 900);
 }
 
 function tz_() {
-  return SpreadsheetApp.getActive().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
+  return ss_().getSpreadsheetTimeZone() || Session.getScriptTimeZone();
 }
 
 function fmt_(d, pattern) {
