@@ -1,4 +1,4 @@
-const VERSION = '2026-10-13.2';
+const VERSION = '2026-10-13.3';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside',
   CO: 'Companies', REQ: 'Requests' };
@@ -209,6 +209,7 @@ const ROUTES = {
   ownerSaveCompany: ownerSaveCompany_,
   ownerResetAdmin: ownerResetAdmin_,
   ownerOpenAdmin: ownerOpenAdmin_,
+  ownerShareInfo: ownerShareInfo_,
   ownerSaveRequest: ownerSaveRequest_,
   requestTrial: requestTrial_,
 };
@@ -619,7 +620,7 @@ function autoLunch_() {
 }
 
 const ROOT_ACTIONS = { ownerLogin: 1, ownerData: 1, ownerCreateCompany: 1, ownerSaveCompany: 1, ownerResetAdmin: 1,
-  ownerOpenAdmin: 1, ownerSaveRequest: 1, requestTrial: 1 };
+  ownerOpenAdmin: 1, ownerShareInfo: 1, ownerSaveRequest: 1, requestTrial: 1 };
 
 function root_() {
   return SpreadsheetApp.getActive();
@@ -814,6 +815,17 @@ function ownerOpenAdmin_(req) {
   try {
     enterCompany_(c);
     return { code: c.code, token: adminToken_(String(settings_().ADMIN_PASSWORD || '')) };
+  } finally {
+    leaveCompany_();
+  }
+}
+
+function ownerShareInfo_(req) {
+  authOwner_(req.token);
+  const c = companyByCode_(req.code);
+  try {
+    enterCompany_(c);
+    return { share: { code: c.code, name: c.name, trialEnds: c.trialEnds, adminPassword: String(settings_().ADMIN_PASSWORD || '') } };
   } finally {
     leaveCompany_();
   }

@@ -89,7 +89,8 @@ function render() {
       '<td>' + esc(c.contact) + (c.phone ? '<div class="muted small">' + esc(c.phone) + '</div>' : '') + '</td>' +
       '<td>' + (c.trialEnds ? niceDate(c.trialEnds) : '<span class="muted">No end</span>') + '</td>' +
       '<td><span class="pill ' + pill + '">' + (c.status === 'Ended' ? 'Trial ended' : c.status === 'Off' ? 'Switched off' : 'Active') + '</span></td>' +
-      '<td style="white-space:nowrap"><button class="btn sm ghost" data-open="' + esc(c.code) + '">Open</button> ' +
+      '<td style="white-space:nowrap"><button class="btn sm" data-share="' + esc(c.code) + '">Share</button> ' +
+      '<button class="btn sm ghost" data-open="' + esc(c.code) + '">Open</button> ' +
       '<button class="btn sm ghost" data-edit="' + esc(c.code) + '">Edit</button></td></tr>';
   }).join('') : '<tr><td colspan="6" class="empty">No companies yet. Create the first one above.</td></tr>';
 }
@@ -153,8 +154,13 @@ function give(c, contact, phone, reset) {
   $('#give-title').textContent = (reset ? 'New password for ' : 'Panel ready for ') + c.name;
   $('#give-text').value = lines.join('\n');
   $('#give-wa').href = waLink(phone, lines.join('\n'));
+  $('#give-share').classList.toggle('hidden', !navigator.share);
   $('#give-modal').classList.remove('hidden');
 }
+
+$('#give-share').addEventListener('click', function () {
+  navigator.share({ title: $('#give-title').textContent, text: $('#give-text').value }).catch(function () { /* closed */ });
+});
 
 $('#give-copy').addEventListener('click', async function () {
   const t = $('#give-text');
@@ -176,6 +182,15 @@ async function openAdmin(code) {
 $('#co-rows').addEventListener('click', function (ev) {
   const op = ev.target.closest('[data-open]');
   if (op) { openAdmin(op.dataset.open); return; }
+  const sb = ev.target.closest('[data-share]');
+  if (sb) {
+    const c = companyOf(sb.dataset.share);
+    busy(sb, 'Share', async function () {
+      const r = await call('ownerShareInfo', { code: c.code });
+      give(r.share, c.contact, c.phone, false);
+    });
+    return;
+  }
   const ed = ev.target.closest('[data-edit]');
   if (!ed) return;
   const c = companyOf(ed.dataset.edit);
