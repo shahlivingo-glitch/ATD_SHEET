@@ -1,4 +1,4 @@
-const VERSION = '2026-10-13.3';
+const VERSION = '2026-10-16.1';
 
 const SH = { EMP: 'Employees', PUNCH: 'Punches', LOC: 'Locations', SET: 'Settings', HOL: 'Holidays', ALERT: 'Alerts', OUT: 'Outside',
   CO: 'Companies', REQ: 'Requests' };
@@ -1382,9 +1382,11 @@ function summarize_(e, date, list, now, hol) {
     else if (p.action === 'LUNCH_IN' && bo) { breakMs += p.ts - bo; bo = null; lunchIn = p.ts; }
   });
   const onBreak = !!bo && !lastOut;
-  if (bo && current && !lastOut) breakMs += now - bo;
+  const leftAtLunch = onBreak && !!first && (!current || now > schedEnd);
+  if (bo && current && !lastOut && !leftAtLunch) breakMs += now - bo;
+  const leftAt = lastOut ? lastOut.ts : (leftAtLunch ? bo : null);
 
-  const endT = lastOut ? lastOut.ts : (current && first ? now : null);
+  const endT = leftAt || (current && first ? now : null);
   let autoLunch = false;
   if (!lunchOut && first && endT && autoLunch_() && (endT - first.ts) / 60000 > AUTO_LUNCH_AFTER_MIN) {
     breakMs = num_(e.lunch, 0) * 60000;
@@ -1395,9 +1397,9 @@ function summarize_(e, date, list, now, hol) {
   const expected = halfOff ? Math.round(fullExpected / 2) : fullExpected;
   const lateMin = first ? Math.max(0, Math.round((first.ts - schedStart) / 60000)) : 0;
   const late = first && !off && lateMin > num_(e.grace, 0) ? lateMin : 0;
-  const early = lastOut && !off ? Math.max(0, Math.round((schedEnd - lastOut.ts) / 60000)) : 0;
+  const early = leftAt && !off ? Math.max(0, Math.round((schedEnd - leftAt) / 60000)) : 0;
   const breakMin = Math.round(breakMs / 60000);
-  const ot = lastOut ? (off ? workedMin : Math.max(0, workedMin - expected)) : 0;
+  const ot = leftAt ? (off ? workedMin : Math.max(0, workedMin - expected)) : 0;
 
   let status, short = false;
   if (!first) {
@@ -1405,7 +1407,7 @@ function summarize_(e, date, list, now, hol) {
     else if (now < schedStart) status = 'Upcoming';
     else if (now < schedEnd) status = 'Not In Yet';
     else status = 'Absent';
-  } else if (!lastOut) {
+  } else if (!leftAt) {
     status = current ? (onBreak ? 'On Lunch' : 'Working') : 'No Check-out';
   } else {
     const minHalf = num_(settings_().MIN_HALF_DAY_HOURS, 3) * 60;
@@ -1424,6 +1426,7 @@ function summarize_(e, date, list, now, hol) {
     lunchIn: lunchIn ? lunchIn.getTime() : null,
     workedMin: workedMin, expectedMin: expected, late: late, early: early,
     breakMin: breakMin, lunchOver: Math.max(0, breakMin - num_(e.lunch, 0)), ot: ot, autoLunch: autoLunch, short: short,
+    leftAtLunch: leftAtLunch ? bo.getTime() : null,
   };
 }
 

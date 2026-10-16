@@ -167,6 +167,7 @@ function renderDay() {
     }
     if (x.halfDayOff) meta.push('<span class="pill info">Half-day off</span>');
     if (x.short) meta.push('<span class="pill bad">Worked under ' + ((A.settings && A.settings.minHalfDay) || 3) + 'h</span>');
+    if (x.leftAtLunch) meta.push('<span class="pill bad">Left at lunch ' + fmtTime(x.leftAtLunch) + ', did not come back</span>');
     if (x.late) meta.push('<span class="pill warn">Late ' + dur(x.late) + '</span>');
     if (x.early) meta.push('<span class="pill warn">Left ' + dur(x.early) + ' early</span>');
     if (x.autoLunch) meta.push('<span class="pill mute">Lunch ' + dur(x.breakMin) + ' auto</span>');
@@ -416,7 +417,8 @@ function renderReport() {
       return '<tr><td>' + esc(d.date) + '</td><td>' + esc(d.id) + '</td><td>' + esc(d.name) + '</td><td>' + statusPill(d.status) +
         (d.manual ? ' <span class="pill info" title="Punches added by the admin">Admin ' + d.manual + '</span>' : '') + '</td><td>' +
         (d.in ? fmtTime(d.in) : '') + '</td><td>' + (d.lunchOut ? fmtTime(d.lunchOut) : '') + '</td><td>' + (d.lunchIn ? fmtTime(d.lunchIn) : '') +
-        '</td><td>' + (d.out ? fmtTime(d.out) : '') + '</td><td class="num">' + (d.in ? dur(d.workedMin) : '') + '</td><td class="num">' +
+        '</td><td>' + (d.out ? fmtTime(d.out) : d.leftAtLunch ? '<span class="pill bad" title="Punched Lunch Out and did not come back">Left at lunch</span>' : '') +
+        '</td><td class="num">' + (d.in ? dur(d.workedMin) : '') + '</td><td class="num">' +
         (d.breakMin ? dur(d.breakMin) : '') + '</td><td class="num">' + (d.late ? dur(d.late) : '') + '</td><td class="num">' +
         (d.early ? dur(d.early) : '') + '</td><td class="num">' + (d.ot ? dur(d.ot) : '') + '</td><td class="num">' +
         (d.outsideCount ? d.outsideCount + '× ' + dur(d.outsideMin) : '') + '</td></tr>';
@@ -431,10 +433,10 @@ $('#rep-csv').addEventListener('click', function () {
   const t = function (ms) { return ms ? fmtTime(ms) : ''; };
   const lines = [['Date', 'Employee ID', 'Name', 'Department', 'Shift', 'Status', 'In', 'Lunch Out', 'Lunch In', 'Out',
     'Worked (min)', 'Lunch (min)', 'Late (min)', 'Early leave (min)', 'Overtime (min)', 'Lunch over (min)',
-    'Times outside', 'Outside (min)', 'Outside in lunch hour (min)', 'Punches added by admin'].join(',')];
+    'Times outside', 'Outside (min)', 'Outside in lunch hour (min)', 'Punches added by admin', 'Left at lunch (did not come back)'].join(',')];
   r.days.forEach(function (d) {
     lines.push([d.date, d.id, d.name, d.dept, d.shift, d.status, t(d.in), t(d.lunchOut), t(d.lunchIn), t(d.out),
-      d.workedMin, d.breakMin, d.late, d.early, d.ot, d.lunchOver, d.outsideCount || 0, d.outsideMin || 0, d.outsideLunchMin || 0, d.manual || 0].map(q).join(','));
+      d.workedMin, d.breakMin, d.late, d.early, d.ot, d.lunchOver, d.outsideCount || 0, d.outsideMin || 0, d.outsideLunchMin || 0, d.manual || 0, t(d.leftAtLunch)].map(q).join(','));
   });
   const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
